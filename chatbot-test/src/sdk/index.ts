@@ -1,17 +1,45 @@
 import { Chunk, Message } from "../type/message/index";
 import { generateId } from "../utils/id/index";
 import { Connection } from "./connection/index";
+import { parseSSEChunk } from "./helpers";
 
-export class Chat {
+/**
+ * 서버에서 파싱된 JSON 객체에서 실제 텍스트 콘텐츠를 추출하는 함수의 타입입니다.
+ * @template T - API 응답 객체의 타입
+ */
+export type ExtractChunk<T> = (parsed: T) => string;
+
+/**
+ * AI 모델과의 스트리밍 대화를 관리하는 코어 클래스입니다.
+ * @template T - API가 반환하는 개별 JSON 데이터의 구조
+ */
+export class Chat<T = unknown> {
   private _messages: Message[] = [];
-  private connect: Connection;
-  private listeners: (() => void)[] = [];
+  private listeners: Set<() => void> = new Set();
 
-  constructor(options: { connection: Connection }) {
+  private connect: Connection;
+  private extractChunk: ExtractChunk<T>;
+
+  /**
+   * Chat 인스턴스를 생성합니다.
+   *
+   * @param options.connection - API 엔드포인트 및 통신 설정
+   * @param options.extractChunk - 응답 데이터에서 텍스트를 추출하는 함수
+   */
+  constructor(options: {
+    connection: Connection;
+    extractChunk: ExtractChunk<T>;
+  }) {
     this.connect = options.connection;
+    this.extractChunk = options.extractChunk;
   }
 
+  /**
+   * 사용자 메시지를 전송하고 AI의 스트리밍 응답을 수신합니다.
+   * @param prompt - 사용자가 입력한 질문 텍스트
+   */
   public sendMessages = async (prompt: string) => {
+    // 사용자 질문을 메시지 리스트에 추가합니다.
     const promptId = generateId();
     const promptMessage: Message = {
       id: promptId,
@@ -21,11 +49,13 @@ export class Chat {
 
     this.messages = [...this.messages, promptMessage];
 
+    // API 전송을 위한 메시지 포맷으로 가공
     const apiMessages = this.messages.map((msg) => ({
       role: msg.role,
       content: msg.content,
     }));
 
+    // AI의 응답을 담을 빈 메시지를 미리 생성합니다.
     const replyId = generateId();
     const pendingReply: Message = {
       id: replyId,
@@ -50,26 +80,46 @@ export class Chat {
     }
   };
 
+  /**
+   * ReadableStream를 읽어 실시간으로 메시지 상태를 업데이트합니다.
+   *
+   * @param response - Fetch 응답 객체
+   * @param targetId - 업데이트할 대상 메시지의 ID (assistant 메시지)
+   */
   private parse = async (response: Response, targetId: string) => {
     if (response.body == null) {
       return;
     }
 
+    let buffer = "";
+
     const reader = response.body
-      .pipeThrough(new TextDecoderStream())
+      .pipeThrough(new TextDecoderStream()) // 바이트를 문자열로 변환
       .pipeThrough(
         new TransformStream<string, Chunk>({
           transform: (chunk, controller) => {
-            try {
-              /**
-               * TODO: Streaming으로 인하여 JSON이 잘려서 전송되는 경우를 방어하는 로직 필요
-               */
-              console.log(`$chunk : \n ${chunk}`);
-              const parsed = JSON.parse(chunk) as Chunk;
-              controller.enqueue(parsed);
-            } catch (e) {
-              // 스트림 청크가 불완전할 때 발생하는 JSON.parse 에러 방어
-              console.error(`parse error ${e}`);
+            console.log(`Chunk: ${chunk}`);
+
+            // SSE 규격에 맞춰 메시지를 분리하고 불완전한 끝부분은 버퍼에 저장합니다.
+            const { cleanMessages, pendingBuffer } = parseSSEChunk(
+              chunk,
+              buffer,
+            );
+
+            buffer = pendingBuffer;
+
+            for (const cleanPart of cleanMessages) {
+              try {
+                const parsed = JSON.parse(cleanPart) as T;
+                const textContent = this.extractChunk(parsed);
+
+                if (textContent) {
+                  // 추출된 텍스트를 다음 스트림 단계로 전달합니다.
+                  controller.enqueue({ id: targetId, content: textContent });
+                }
+              } catch (e) {
+                console.error(`파싱 에러: ${cleanPart}`, e);
+              }
             }
           },
         }),
@@ -80,19 +130,19 @@ export class Chat {
       const { done, value } = await reader.read();
 
       if (done) {
-        // Streaming 이 완료되는 경우 상태를 messages 내부 상태를 Done으로 변경합니다.
-        this.messages = this.messages.map((msg) =>
-          msg.id === targetId ? { ...msg, state: "done" } : msg,
+        // 스트림 종료 시 해당 메시지 상태를 'done'으로 변경합니다.
+        this.messages = this.messages.map((message) =>
+          message.id === targetId ? { ...message, state: "done" } : message,
         );
-
+        console.log("Streaming Done");
         break;
       }
 
       if (value && value.content) {
-        this.messages = this.messages.map((msg) =>
-          msg.id === targetId
-            ? { ...msg, content: msg.content + value.content }
-            : msg,
+        this.messages = this.messages.map((message) =>
+          message.id === targetId
+            ? { ...message, content: message.content + value.content }
+            : message,
         );
       }
     }
@@ -107,10 +157,17 @@ export class Chat {
     return this._messages;
   }
 
+  /**
+   * 메시지 상태 변화를 감지하기 위한 구독 함수입니다.
+   *
+   * @param listener - 상태 변경 시 실행될 콜백 함수
+   * @returns 구독 해제를 위한 unsubscribe 함수
+   */
   public subscribe(listener: () => void) {
-    this.listeners.push(listener);
+    this.listeners.add(listener);
+
     return () => {
-      this.listeners = this.listeners.filter((l) => l !== listener);
+      this.listeners.delete(listener);
     };
   }
 

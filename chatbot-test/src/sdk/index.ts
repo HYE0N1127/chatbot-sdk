@@ -1,7 +1,12 @@
-import { Chunk, Message } from "../type/message/index";
+import { Message } from "../type/message/index";
 import { generateId } from "../utils/id/index";
 import { Connection } from "./connection/index";
 import { parseSSEChunk } from "./helpers";
+
+type Chunk = {
+  id: string;
+  content: string;
+};
 
 /**
  * 서버에서 파싱된 JSON 객체에서 실제 텍스트 콘텐츠를 추출하는 함수의 타입입니다.
@@ -39,7 +44,7 @@ export class Chat<T = unknown> {
    * 사용자 메시지를 전송하고 AI의 스트리밍 응답을 수신합니다.
    * @param prompt - 사용자가 입력한 질문 텍스트
    */
-  public sendMessages = async (prompt: string) => {
+  public sendMessage = async (prompt: string) => {
     this.abortController = new AbortController();
 
     // 사용자 질문을 메시지 리스트에 추가합니다.
@@ -124,8 +129,6 @@ export class Chat<T = unknown> {
       .pipeThrough(
         new TransformStream<string, Chunk>({
           transform: (chunk, controller) => {
-            console.log(`Chunk: ${chunk}`);
-
             // SSE 규격에 맞춰 메시지를 분리하고 불완전한 끝부분은 버퍼에 저장합니다.
             const { messages, pendingBuffer } = parseSSEChunk(chunk, buffer);
 
@@ -185,7 +188,7 @@ export class Chat<T = unknown> {
   }
 
   public get isStreaming(): boolean {
-    return this._messages.at(-1)?.state === "streaming";
+    return this._messages.some((message) => message.state === "streaming");
   }
 
   /**

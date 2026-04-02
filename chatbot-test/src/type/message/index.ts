@@ -5,7 +5,3 @@ export type Message = {
   content: string;
 };
 
-export type Chunk = {
-  id: string;
-  content: string;
-};

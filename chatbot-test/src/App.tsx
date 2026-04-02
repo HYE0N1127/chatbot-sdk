@@ -95,7 +95,7 @@ function App() {
 
   const handleSend = () => {
     if (!inputText.trim()) return;
-    chat.sendMessages(inputText);
+    chat.sendMessage(inputText);
     setInputText("");
   };
 

@@ -33,7 +33,7 @@ export type Config = {
   formatPayload?: (payload: Payload) => any;
 };
 
-export type Connection = (payload: Payload) => Promise<Response>;
+export type Connection = (payload: Payload, signal?: AbortSignal) => Promise<Response>;
 
 /**
  * 주어진 설정을 바탕으로 AI API와의 통신을 담당하는 Connection 함수를 생성합니다.
@@ -56,7 +56,7 @@ export type Connection = (payload: Payload) => Promise<Response>;
   }
  */
 export const createConnection = (config: Config): Connection => {
-  return async (payload: Payload): Promise<Response> => {
+  return async (payload: Payload, signal?: AbortSignal): Promise<Response> => {
     /**
      * formatPayload가 존재하는 경우, 이에 맞는 payload로 변경하는 작업을 진행합니다.
      */
@@ -71,6 +71,7 @@ export const createConnection = (config: Config): Connection => {
         ...config.headers,
       },
       body: JSON.stringify(body),
+      signal,
     });
 
     return response;

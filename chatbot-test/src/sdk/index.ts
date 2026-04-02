@@ -19,6 +19,7 @@ export class Chat<T = unknown> {
 
   private connect: Connection;
   private extractChunk: ExtractChunk<T>;
+  private abortController: AbortController | null = null;
 
   /**
    * Chat 인스턴스를 생성합니다.
@@ -39,6 +40,8 @@ export class Chat<T = unknown> {
    * @param prompt - 사용자가 입력한 질문 텍스트
    */
   public sendMessages = async (prompt: string) => {
+    this.abortController = new AbortController();
+
     // 사용자 질문을 메시지 리스트에 추가합니다.
     const promptId = generateId();
     const promptMessage: Message = {
@@ -66,18 +69,37 @@ export class Chat<T = unknown> {
     this.messages = [...this.messages, pendingReply];
 
     try {
-      const response = await this.connect({
-        messages: apiMessages,
-      });
+      const response = await this.connect(
+        { messages: apiMessages },
+        this.abortController.signal,
+      );
 
       if (!response.ok || !response.body) {
         throw new Error("네트워크 응답이 올바르지 않습니다.");
       }
 
-      this.parse(response, replyId);
+      await this.parse(response, replyId, this.abortController.signal);
     } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        // 사용자가 직접 중단한 경우 — state를 "done"으로 처리합니다.
+        this.messages = this.messages.map((message) =>
+          message.id === replyId ? { ...message, state: "done" } : message,
+        );
+        return;
+      }
+
       console.error(`Send message Error: ${error}`);
+      this.messages = this.messages.map((message) =>
+        message.id === replyId ? { ...message, state: "error" } : message,
+      );
     }
+  };
+
+  /**
+   * 현재 진행 중인 스트리밍 응답을 중단합니다.
+   */
+  public abort = () => {
+    this.abortController?.abort();
   };
 
   /**
@@ -86,7 +108,11 @@ export class Chat<T = unknown> {
    * @param response - Fetch 응답 객체
    * @param targetId - 업데이트할 대상 메시지의 ID (assistant 메시지)
    */
-  private parse = async (response: Response, targetId: string) => {
+  private parse = async (
+    response: Response,
+    targetId: string,
+    signal?: AbortSignal,
+  ) => {
     if (response.body == null) {
       return;
     }
@@ -101,14 +127,11 @@ export class Chat<T = unknown> {
             console.log(`Chunk: ${chunk}`);
 
             // SSE 규격에 맞춰 메시지를 분리하고 불완전한 끝부분은 버퍼에 저장합니다.
-            const { cleanMessages, pendingBuffer } = parseSSEChunk(
-              chunk,
-              buffer,
-            );
+            const { messages, pendingBuffer } = parseSSEChunk(chunk, buffer);
 
             buffer = pendingBuffer;
 
-            for (const cleanPart of cleanMessages) {
+            for (const cleanPart of messages) {
               try {
                 const parsed = JSON.parse(cleanPart) as T;
                 const textContent = this.extractChunk(parsed);
@@ -127,6 +150,11 @@ export class Chat<T = unknown> {
       .getReader();
 
     while (true) {
+      if (signal?.aborted) {
+        reader.cancel();
+        break;
+      }
+
       const { done, value } = await reader.read();
 
       if (done) {
@@ -134,7 +162,6 @@ export class Chat<T = unknown> {
         this.messages = this.messages.map((message) =>
           message.id === targetId ? { ...message, state: "done" } : message,
         );
-        console.log("Streaming Done");
         break;
       }
 
@@ -155,6 +182,10 @@ export class Chat<T = unknown> {
 
   public get messages(): Message[] {
     return this._messages;
+  }
+
+  public get isStreaming(): boolean {
+    return this._messages.at(-1)?.state === "streaming";
   }
 
   /**

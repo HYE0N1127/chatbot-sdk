@@ -146,9 +146,9 @@ export class Chat<T = unknown> {
 
             buffer = pendingBuffer;
 
-            for (const cleanPart of messages) {
+            for (const jsonString of messages) {
               try {
-                const parsed = JSON.parse(cleanPart) as T;
+                const parsed = JSON.parse(jsonString) as T;
                 const textContent = this.extractChunk(parsed);
 
                 if (textContent) {
@@ -156,7 +156,7 @@ export class Chat<T = unknown> {
                   controller.enqueue({ id: targetId, content: textContent });
                 }
               } catch (e) {
-                console.error(`파싱 에러: ${cleanPart}`, e);
+                console.error(`파싱 에러: ${jsonString}`, e);
               }
             }
           },

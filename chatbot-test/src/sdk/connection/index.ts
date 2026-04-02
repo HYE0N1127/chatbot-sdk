@@ -1,6 +1,6 @@
 export type Role = "system" | "user" | "assistant";
 
-export type Message = {
+type ApiMessage = {
   role: Role;
   content: string;
 };
@@ -10,7 +10,7 @@ export type Payload = {
   model?: string;
 
   /** 대화 내역 배열 */
-  messages: Message[];
+  messages: ApiMessage[];
 
   /** 스트리밍 여부 */
   stream?: boolean;

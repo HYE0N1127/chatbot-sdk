@@ -57,6 +57,11 @@ export class Chat<T = unknown> {
    * @param input - 사용자가 입력한 질문 텍스트
    */
   public sendMessage = async (input: string) => {
+    if (this.isStreaming) {
+      console.warn("이미 스트리밍 중입니다. 완료 후 다시 시도해주세요.");
+      return;
+    }
+
     this.abortController = new AbortController();
 
     // 사용자 질문을 메시지 리스트에 추가합니다.
@@ -124,19 +129,16 @@ export class Chat<T = unknown> {
    *
    * @param response - Fetch 응답 객체
    * @param targetId - 업데이트할 대상 메시지의 ID (assistant 메시지)
+   * @param signal - 스트리밍 중단을 위한 AbortSignal
    */
   private parse = async (
     response: Response,
     targetId: string,
-    signal?: AbortSignal,
+    signal: AbortSignal,
   ) => {
-    if (response.body == null) {
-      return;
-    }
-
     let buffer = "";
 
-    const reader = response.body
+    const reader = response.body!
       .pipeThrough(new TextDecoderStream()) // 바이트를 문자열로 변환
       .pipeThrough(
         new TransformStream<string, Chunk>({
@@ -165,7 +167,7 @@ export class Chat<T = unknown> {
       .getReader();
 
     while (true) {
-      if (signal?.aborted) {
+      if (signal.aborted) {
         reader.cancel();
         break;
       }

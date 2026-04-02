@@ -27,10 +27,10 @@ export type Config = {
   headers?: Record<string, string>;
 
   /** Request Body */
-  body?: Record<string, any>;
+  body?: Record<string, unknown>;
 
   /** 원하는 api에 맞는 규격으로 format하는 함수를 전달받습니다. */
-  formatPayload?: (payload: Payload) => any;
+  formatPayload?: (payload: Payload) => unknown;
 };
 
 export type Connection = (payload: Payload, signal?: AbortSignal) => Promise<Response>;

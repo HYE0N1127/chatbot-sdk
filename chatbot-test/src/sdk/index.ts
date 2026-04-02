@@ -118,6 +118,38 @@ export class Chat<T = unknown> {
   };
 
   /**
+   * 시스템 프롬프트를 교체합니다. 빈 문자열을 전달하면 시스템 메시지를 제거합니다.
+   * @param prompt - 새로운 시스템 프롬프트. 빈 문자열이면 제거합니다.
+   */
+  public modifySystemPrompt = (prompt: string) => {
+    if (this.isStreaming) {
+      console.warn("스트리밍 중에는 시스템 프롬프트를 변경할 수 없습니다.");
+      return;
+    }
+
+    const hasSystem = this._messages[0]?.role === "system";
+
+    if (!prompt) {
+      if (hasSystem) {
+        this.messages = this._messages.slice(1);
+      }
+      return;
+    }
+
+    if (hasSystem) {
+      this.messages = [
+        { ...this._messages[0], content: prompt },
+        ...this._messages.slice(1),
+      ];
+    } else {
+      this.messages = [
+        { id: generateId(), role: "system", content: prompt },
+        ...this._messages,
+      ];
+    }
+  };
+
+  /**
    * 현재 진행 중인 스트리밍 응답을 중단합니다.
    */
   public abort = () => {
@@ -138,8 +170,8 @@ export class Chat<T = unknown> {
   ) => {
     let buffer = "";
 
-    const reader = response.body!
-      .pipeThrough(new TextDecoderStream()) // 바이트를 문자열로 변환
+    const reader = response
+      .body!.pipeThrough(new TextDecoderStream()) // 바이트를 문자열로 변환
       .pipeThrough(
         new TransformStream<string, Chunk>({
           transform: (chunk, controller) => {

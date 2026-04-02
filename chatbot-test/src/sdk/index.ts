@@ -31,34 +31,46 @@ export class Chat<T = unknown> {
    *
    * @param options.connection - API 엔드포인트 및 통신 설정
    * @param options.extractChunk - 응답 데이터에서 텍스트를 추출하는 함수
+   * @param options.systemPrompt - 시스템 프롬프트
    */
-  constructor(options: {
+  constructor({
+    connection,
+    extractChunk,
+    systemPrompt,
+  }: {
     connection: Connection;
     extractChunk: ExtractChunk<T>;
+    systemPrompt?: string;
   }) {
-    this.connect = options.connection;
-    this.extractChunk = options.extractChunk;
+    this.connect = connection;
+    this.extractChunk = extractChunk;
+
+    if (systemPrompt) {
+      this._messages = [
+        { id: generateId(), role: "system", content: systemPrompt },
+      ];
+    }
   }
 
   /**
    * 사용자 메시지를 전송하고 AI의 스트리밍 응답을 수신합니다.
-   * @param prompt - 사용자가 입력한 질문 텍스트
+   * @param input - 사용자가 입력한 질문 텍스트
    */
-  public sendMessage = async (prompt: string) => {
+  public sendMessage = async (input: string) => {
     this.abortController = new AbortController();
 
     // 사용자 질문을 메시지 리스트에 추가합니다.
     const promptId = generateId();
-    const promptMessage: Message = {
+    const prompt: Message = {
       id: promptId,
       role: "user",
-      content: prompt,
+      content: input,
     };
 
-    this.messages = [...this.messages, promptMessage];
+    this.messages = [...this._messages, prompt];
 
-    // API 전송을 위한 메시지 포맷으로 가공
-    const apiMessages = this.messages.map((msg) => ({
+    // API 전송을 위한 메시지 포맷으로 가공 (system 메시지 포함)
+    const apiMessages = this._messages.map((msg) => ({
       role: msg.role,
       content: msg.content,
     }));
@@ -71,7 +83,7 @@ export class Chat<T = unknown> {
       state: "streaming",
       content: "",
     };
-    this.messages = [...this.messages, pendingReply];
+    this.messages = [...this._messages, pendingReply];
 
     try {
       const response = await this.connect(
@@ -86,15 +98,15 @@ export class Chat<T = unknown> {
       await this.parse(response, replyId, this.abortController.signal);
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
-        // 사용자가 직접 중단한 경우 — state를 "done"으로 처리합니다.
-        this.messages = this.messages.map((message) =>
+        // 사용자가 직접 중단한 경우 state를 "done"으로 처리합니다.
+        this.messages = this._messages.map((message) =>
           message.id === replyId ? { ...message, state: "done" } : message,
         );
         return;
       }
 
       console.error(`Send message Error: ${error}`);
-      this.messages = this.messages.map((message) =>
+      this.messages = this._messages.map((message) =>
         message.id === replyId ? { ...message, state: "error" } : message,
       );
     }
@@ -162,14 +174,14 @@ export class Chat<T = unknown> {
 
       if (done) {
         // 스트림 종료 시 해당 메시지 상태를 'done'으로 변경합니다.
-        this.messages = this.messages.map((message) =>
+        this.messages = this._messages.map((message) =>
           message.id === targetId ? { ...message, state: "done" } : message,
         );
         break;
       }
 
       if (value && value.content) {
-        this.messages = this.messages.map((message) =>
+        this.messages = this._messages.map((message) =>
           message.id === targetId
             ? { ...message, content: message.content + value.content }
             : message,
@@ -184,7 +196,7 @@ export class Chat<T = unknown> {
   }
 
   public get messages(): Message[] {
-    return this._messages;
+    return this._messages.filter((message) => message.role !== "system");
   }
 
   public get isStreaming(): boolean {

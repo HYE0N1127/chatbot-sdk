@@ -1,29 +1,46 @@
 import { Message } from "../type/message/index";
 import { generateId } from "../utils/id/index";
 import { Connection } from "./connection/index";
-import { parseSSEChunk } from "./helpers";
 
-type Chunk = {
+export type Chunk = {
   id: string;
   content: string;
 };
 
-/**
- * 서버에서 파싱된 JSON 객체에서 실제 텍스트 콘텐츠를 추출하는 함수의 타입입니다.
- * @template T - API 응답 객체의 타입
- */
-export type ExtractChunk<T> = (parsed: T) => string;
+const consumeStream = async <T>({
+  stream,
+  onError,
+  onDone,
+}: {
+  stream: ReadableStream<T>;
+  onError?: (error: unknown) => void;
+  onDone?: () => void;
+}): Promise<void> => {
+  const reader = stream.getReader();
+
+  try {
+    while (true) {
+      const { done } = await reader.read();
+
+      if (done) {
+        onDone?.();
+        break;
+      }
+    }
+  } catch (error) {
+    onError?.(error);
+  }
+};
 
 /**
  * AI 모델과의 스트리밍 대화를 관리하는 코어 클래스입니다.
  * @template T - API가 반환하는 개별 JSON 데이터의 구조
  */
-export class Chat<T = unknown> {
+export class Chat {
   private _messages: Message[] = [];
   private listeners: Set<() => void> = new Set();
 
   private connect: Connection;
-  private extractChunk: ExtractChunk<T>;
   private abortController: AbortController | null = null;
 
   /**
@@ -35,15 +52,12 @@ export class Chat<T = unknown> {
    */
   constructor({
     connection,
-    extractChunk,
     systemPrompt,
   }: {
     connection: Connection;
-    extractChunk: ExtractChunk<T>;
     systemPrompt?: string;
   }) {
     this.connect = connection;
-    this.extractChunk = extractChunk;
 
     if (systemPrompt) {
       this._messages = [
@@ -96,11 +110,26 @@ export class Chat<T = unknown> {
         this.abortController.signal,
       );
 
-      if (!response.ok || !response.body) {
-        throw new Error("네트워크 응답이 올바르지 않습니다.");
-      }
-
-      await this.parse(response, replyId, this.abortController.signal);
+      consumeStream({
+        stream: response.pipeThrough(
+          new TransformStream({
+            transform: (chunk, controller) => {
+              if (chunk && chunk.content) {
+                this.messages = this._messages.map((message) =>
+                  message.id === replyId
+                    ? { ...message, content: message.content + chunk.content }
+                    : message,
+                );
+              }
+            },
+          }),
+        ),
+        onDone: () => {
+          this.messages = this._messages.map((message) =>
+            message.id === replyId ? { ...message, state: "done" } : message,
+          );
+        },
+      });
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
         // 사용자가 직접 중단한 경우 state를 "done"으로 처리합니다.
@@ -154,74 +183,6 @@ export class Chat<T = unknown> {
    */
   public abort = () => {
     this.abortController?.abort();
-  };
-
-  /**
-   * ReadableStream를 읽어 실시간으로 메시지 상태를 업데이트합니다.
-   *
-   * @param response - Fetch 응답 객체
-   * @param targetId - 업데이트할 대상 메시지의 ID (assistant 메시지)
-   * @param signal - 스트리밍 중단을 위한 AbortSignal
-   */
-  private parse = async (
-    response: Response,
-    targetId: string,
-    signal: AbortSignal,
-  ) => {
-    let buffer = "";
-
-    const reader = response
-      .body!.pipeThrough(new TextDecoderStream()) // 바이트를 문자열로 변환
-      .pipeThrough(
-        new TransformStream<string, Chunk>({
-          transform: (chunk, controller) => {
-            // SSE 규격에 맞춰 메시지를 분리하고 불완전한 끝부분은 버퍼에 저장합니다.
-            const { messages, pendingBuffer } = parseSSEChunk(chunk, buffer);
-
-            buffer = pendingBuffer;
-
-            for (const jsonString of messages) {
-              try {
-                const parsed = JSON.parse(jsonString) as T;
-                const textContent = this.extractChunk(parsed);
-
-                if (textContent) {
-                  // 추출된 텍스트를 다음 스트림 단계로 전달합니다.
-                  controller.enqueue({ id: targetId, content: textContent });
-                }
-              } catch (e) {
-                console.error(`파싱 에러: ${jsonString}`, e);
-              }
-            }
-          },
-        }),
-      )
-      .getReader();
-
-    while (true) {
-      if (signal.aborted) {
-        reader.cancel();
-        break;
-      }
-
-      const { done, value } = await reader.read();
-
-      if (done) {
-        // 스트림 종료 시 해당 메시지 상태를 'done'으로 변경합니다.
-        this.messages = this._messages.map((message) =>
-          message.id === targetId ? { ...message, state: "done" } : message,
-        );
-        break;
-      }
-
-      if (value && value.content) {
-        this.messages = this._messages.map((message) =>
-          message.id === targetId
-            ? { ...message, content: message.content + value.content }
-            : message,
-        );
-      }
-    }
   };
 
   private set messages(value: Message[]) {

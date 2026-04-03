@@ -31,8 +31,9 @@ function App() {
   const [, setTick] = useState(0);
 
   const chat = useMemo(() => {
-    return new Chat<GeminiResponse>({
-      connection: createConnection({
+    console.log(process.env.REACT_APP_GEMINI_API_KEY);
+    return new Chat({
+      connection: createConnection<GeminiResponse>({
         url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse",
         headers: {
           "x-goog-api-key": process.env.REACT_APP_GEMINI_API_KEY || "",
@@ -43,10 +44,10 @@ function App() {
             parts: [{ text: msg.content }],
           })),
         }),
+        transform: (parsed) => {
+          return parsed.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        },
       }),
-      extractChunk: (parsed) => {
-        return parsed.candidates?.[0]?.content?.parts?.[0]?.text || "";
-      },
     });
   }, []);
 

@@ -1,3 +1,7 @@
+import { parseSSEChunk } from "../helpers";
+import { Chunk } from "../index";
+import { generateId } from "../../utils/id/index";
+
 export type Role = "system" | "user" | "assistant";
 
 type ApiMessage = {
@@ -19,7 +23,7 @@ export type Payload = {
   temperature?: number;
 };
 
-export type Config = {
+export type Config<T> = {
   /** API URL */
   url: string;
 
@@ -31,9 +35,14 @@ export type Config = {
 
   /** 원하는 api에 맞는 규격으로 format하는 함수를 전달받습니다. */
   formatPayload?: (payload: Payload) => unknown;
+
+  transform: (parsed: T) => string;
 };
 
-export type Connection = (payload: Payload, signal?: AbortSignal) => Promise<Response>;
+export type Connection = (
+  payload: Payload,
+  signal?: AbortSignal,
+) => Promise<ReadableStream<Chunk>>;
 
 /**
  * 주어진 설정을 바탕으로 AI API와의 통신을 담당하는 Connection 함수를 생성합니다.
@@ -55,8 +64,11 @@ export type Connection = (payload: Payload, signal?: AbortSignal) => Promise<Res
     }),
   }
  */
-export const createConnection = (config: Config): Connection => {
-  return async (payload: Payload, signal?: AbortSignal): Promise<Response> => {
+export const createConnection = <T>(config: Config<T>): Connection => {
+  return async (
+    payload: Payload,
+    signal?: AbortSignal,
+  ): Promise<ReadableStream<Chunk>> => {
     /**
      * formatPayload가 존재하는 경우, 이에 맞는 payload로 변경하는 작업을 진행합니다.
      */
@@ -74,6 +86,38 @@ export const createConnection = (config: Config): Connection => {
       signal,
     });
 
-    return response;
+    if (!response.ok || !response.body) {
+      throw new Error("네트워크 응답이 올바르지 않습니다.");
+    }
+
+    const targetId = generateId();
+    let buffer = "";
+
+    return response.body
+      .pipeThrough(new TextDecoderStream()) // 바이트를 문자열로 변환
+      .pipeThrough(
+        new TransformStream<string, Chunk>({
+          transform: (chunk, controller) => {
+            // SSE 규격에 맞춰 메시지를 분리하고 불완전한 끝부분은 버퍼에 저장합니다.
+            const { messages, pendingBuffer } = parseSSEChunk(chunk, buffer);
+
+            buffer = pendingBuffer;
+
+            for (const jsonString of messages) {
+              try {
+                const parsed = JSON.parse(jsonString) as T;
+                const textContent = config.transform(parsed);
+
+                if (textContent) {
+                  // 추출된 텍스트를 다음 스트림 단계로 전달합니다.
+                  controller.enqueue({ id: targetId, content: textContent });
+                }
+              } catch (e) {
+                console.error(`파싱 에러: ${jsonString}`, e);
+              }
+            }
+          },
+        }),
+      );
   };
 };

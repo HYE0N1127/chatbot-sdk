@@ -1,3 +1,10 @@
+export type SSEEvent = {
+  event?: string;
+  id?: string;
+  retry?: string;
+  data?: string;
+};
+
 /**
  * 들어온 청크와 기존 버퍼를 조합하여, 완전한 SSE 메시지 배열과 남은 버퍼를 반환합니다.
  */
@@ -17,31 +24,39 @@ export const parseSSEChunk = (chunk: string, currentBuffer: string) => {
    */
   const pendingBuffer = parts.pop() ?? "";
 
-  const messages: string[] = [];
+  const events: SSEEvent[] = [];
 
   for (const part of parts) {
-    // 이벤트 블록 안에서 'data: ' 로 시작하는 줄을 찾아서, 그 뒤에 오는 실제 내용만 추출합니다.
-    // (?:^|\n) : 문자열 시작이거나 줄바꿈 직후
-    // data: ? : 'data:' 뒤에 공백이 0개 또는 1개
-    // (.*) : 그 뒤의 모든 문자 (이 부분이 캡처 그룹 1이 됩니다)
-    const dataLines = Array.from(part.matchAll(/(?:^|\n)data: ?(.*)/g)).map(
-      (match) => match[1],
-    );
-
-    // 'data:' 줄이 없으면 의미 없는 이벤트이기에, 무시하고 다음으로 넘어갑니다
-    if (dataLines.length === 0) {
-      continue;
-    }
-
-    // 한 이벤트 안에 여러 'data: ' 줄이 오는 것을 방지하고, 줄바꿈을 통해 하나의 문자열로 변환합니다.
-    const joined = dataLines.join("\n");
-
-    if (!joined || joined === "[DONE]") {
-      continue;
-    }
-
-    messages.push(joined);
+    events.push(extract(part));
   }
 
-  return { messages, pendingBuffer };
+  // 배열 반환
+  return { events, pendingBuffer };
+};
+
+const extract = (part: string): SSEEvent => {
+  const eventMatches = Array.from(part.matchAll(/(?:^|\n)event: ?(.*)/g)).map(
+    (match) => match[1],
+  );
+  const idMatches = Array.from(part.matchAll(/(?:^|\n)id: ?(.*)/g)).map(
+    (match) => match[1],
+  );
+  const retryMatches = Array.from(part.matchAll(/(?:^|\n)retry: ?(.*)/g)).map(
+    (match) => match[1],
+  );
+  const dataLines = Array.from(part.matchAll(/(?:^|\n)data: ?(.*)/g)).map(
+    (match) => match[1],
+  );
+
+  const joinedData = dataLines.join("\n");
+  const eventType = eventMatches.pop() ?? "";
+  const eventId = idMatches.pop() ?? "";
+  const retryTime = retryMatches.pop() ?? "";
+
+  return {
+    ...(eventType && { event: eventType }),
+    ...(eventId && { id: eventId }),
+    ...(retryTime && { retry: retryTime }),
+    ...(joinedData && { data: joinedData }),
+  };
 };

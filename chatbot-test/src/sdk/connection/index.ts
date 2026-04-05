@@ -69,55 +69,54 @@ export const createConnection = <T>(config: Config<T>): Connection => {
     payload: Payload,
     signal?: AbortSignal,
   ): Promise<ReadableStream<Chunk>> => {
-    /**
-     * formatPayload가 존재하는 경우, 이에 맞는 payload로 변경하는 작업을 진행합니다.
-     */
+    let buffer = "";
+
     const body = config.formatPayload
       ? config.formatPayload(payload)
       : { ...config.body, ...payload, stream: true };
 
-    const response = await fetch(config.url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...config.headers,
-      },
-      body: JSON.stringify(body),
-      signal,
-    });
+    const connect = async (): Promise<ReadableStream<Chunk>> => {
+      const response = await fetch(config.url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...config.headers,
+        },
+        body: JSON.stringify(body),
+        signal,
+      });
 
-    if (!response.ok || !response.body) {
-      throw new Error("네트워크 응답이 올바르지 않습니다.");
-    }
+      if (!response.ok || !response.body) {
+        throw new Error(`네트워크 응답 에러: ${response.status}`);
+      }
 
-    const targetId = generateId();
-    let buffer = "";
+      const targetId = generateId();
 
-    return response.body
-      .pipeThrough(new TextDecoderStream()) // 바이트를 문자열로 변환
-      .pipeThrough(
+      return response.body.pipeThrough(new TextDecoderStream()).pipeThrough(
         new TransformStream<string, Chunk>({
           transform: (chunk, controller) => {
-            // SSE 규격에 맞춰 메시지를 분리하고 불완전한 끝부분은 버퍼에 저장합니다.
-            const { messages, pendingBuffer } = parseSSEChunk(chunk, buffer);
-
+            const { events, pendingBuffer } = parseSSEChunk(chunk, buffer);
             buffer = pendingBuffer;
 
-            for (const jsonString of messages) {
-              try {
-                const parsed = JSON.parse(jsonString) as T;
-                const textContent = config.transform(parsed);
+            for (const event of events) {
+              if (event.data) {
+                try {
+                  const parsed = JSON.parse(event.data) as T;
+                  const textContent = config.transform(parsed);
 
-                if (textContent) {
-                  // 추출된 텍스트를 다음 스트림 단계로 전달합니다.
-                  controller.enqueue({ id: targetId, content: textContent });
+                  if (textContent) {
+                    controller.enqueue({ id: targetId, content: textContent });
+                  }
+                } catch (e) {
+                  console.warn(`JSON 파싱 에러:`, e);
                 }
-              } catch (e) {
-                console.error(`파싱 에러: ${jsonString}`, e);
               }
             }
           },
         }),
       );
+    };
+
+    return connect();
   };
 };

@@ -37,6 +37,12 @@ export type Config<T> = {
   formatPayload?: (payload: Payload) => unknown;
 
   transform: (parsed: T) => string;
+
+  /** Retry 이벤트를 받아온 경우 호출되는 CallBack 함수 */
+  onReconnecting?: (retryDelay: number, attempt: number) => void;
+
+  /** Retry 횟수 제한 (기본값: 3) */
+  limit?: number;
 };
 
 export type Connection = (
@@ -69,54 +75,106 @@ export const createConnection = <T>(config: Config<T>): Connection => {
     payload: Payload,
     signal?: AbortSignal,
   ): Promise<ReadableStream<Chunk>> => {
+    const { limit = 5, url, headers, body, formatPayload, transform } = config;
+    let lastEventId: string | null = null;
+    let retryDelay = 0;
+    let attempt = 0;
     let buffer = "";
 
-    const body = config.formatPayload
-      ? config.formatPayload(payload)
-      : { ...config.body, ...payload, stream: true };
+    const formatted = formatPayload
+      ? formatPayload(payload)
+      : { ...body, ...payload, stream: true };
 
-    const connect = async (): Promise<ReadableStream<Chunk>> => {
-      const response = await fetch(config.url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...config.headers,
-        },
-        body: JSON.stringify(body),
-        signal,
-      });
+    /**
+     * 스트림은 일회성 이기에, ReadableStream을 생성하여 내부 스트림과 외부에 전달될 스트림을 다르게 처리합니다.
+     * 서버 통신으로 스트림이 끊어지는 경우에도 현재 스트림은 스트리밍이 해제되지 않고 재연결 요청을 진행합니다.
+     */
+    return new ReadableStream<Chunk>({
+      async start(controller) {
+        const targetId = generateId();
 
-      if (!response.ok || !response.body) {
-        throw new Error(`네트워크 응답 에러: ${response.status}`);
-      }
+        const connect = async (): Promise<void> => {
+          try {
+            const response = await fetch(url, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                ...(lastEventId && { "Last-Event-ID": lastEventId }),
+                ...headers,
+              },
+              body: JSON.stringify(formatted),
+              signal,
+            });
 
-      const targetId = generateId();
+            if (!response.ok || !response.body) {
+              throw new Error(`네트워크 응답 에러: ${response.status}`);
+            }
 
-      return response.body.pipeThrough(new TextDecoderStream()).pipeThrough(
-        new TransformStream<string, Chunk>({
-          transform: (chunk, controller) => {
-            const { events, pendingBuffer } = parseSSEChunk(chunk, buffer);
-            buffer = pendingBuffer;
+            attempt = 0;
 
-            for (const event of events) {
-              if (event.data) {
-                try {
-                  const parsed = JSON.parse(event.data) as T;
-                  const textContent = config.transform(parsed);
+            const reader = response.body
+              .pipeThrough(new TextDecoderStream())
+              .getReader();
 
-                  if (textContent) {
-                    controller.enqueue({ id: targetId, content: textContent });
+            while (true) {
+              const { done, value } = await reader.read();
+
+              if (done) {
+                break;
+              }
+
+              const { events, pendingBuffer } = parseSSEChunk(value, buffer);
+              buffer = pendingBuffer;
+
+              for (const event of events) {
+                if (event.id) {
+                  lastEventId = event.id;
+                }
+
+                if (event.retry) {
+                  retryDelay = parseInt(event.retry, 10);
+                }
+
+                if (event.data) {
+                  try {
+                    const parsed = JSON.parse(event.data) as T;
+                    const textContent = transform(parsed);
+
+                    if (textContent) {
+                      controller.enqueue({
+                        id: targetId,
+                        content: textContent,
+                      });
+                    }
+                  } catch (error) {
+                    console.warn(`JSON 파싱 에러:`, error);
                   }
-                } catch (e) {
-                  console.warn(`JSON 파싱 에러:`, e);
                 }
               }
             }
-          },
-        }),
-      );
-    };
 
-    return connect();
+            controller.close();
+          } catch (error) {
+            if (error instanceof Error && error.name === "AbortError") {
+              controller.close();
+              return;
+            }
+
+            if (attempt < limit) {
+              attempt++;
+
+              config.onReconnecting?.(retryDelay, attempt);
+              await new Promise((resolve) => setTimeout(resolve, retryDelay));
+
+              return connect();
+            } else {
+              controller.error(error);
+            }
+          }
+        };
+
+        connect();
+      },
+    });
   };
 };

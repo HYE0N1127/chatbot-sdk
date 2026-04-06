@@ -88,7 +88,7 @@ export class Chat {
 
     this.messages = [...this._messages, prompt];
 
-    // API 전송을 위한 메시지 포맷으로 가공 (system 메시지 포함)
+    // API 전송을 위한 메시지 포맷으로 가공합니다.
     const apiMessages = this._messages.map((msg) => ({
       role: msg.role,
       content: msg.content,
@@ -110,10 +110,10 @@ export class Chat {
         this.abortController.signal,
       );
 
-      consumeStream({
+      consumeStream<Chunk>({
         stream: response.pipeThrough(
           new TransformStream({
-            transform: (chunk, controller) => {
+            transform: (chunk, _) => {
               if (chunk && chunk.content) {
                 this.messages = this._messages.map((message) =>
                   message.id === replyId
@@ -131,15 +131,15 @@ export class Chat {
         },
       });
     } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") {
+      if (error instanceof Error && error.name === "AbortError") {
         // 사용자가 직접 중단한 경우 state를 "done"으로 처리합니다.
         this.messages = this._messages.map((message) =>
           message.id === replyId ? { ...message, state: "done" } : message,
         );
+
         return;
       }
 
-      console.error(`Send message Error: ${error}`);
       this.messages = this._messages.map((message) =>
         message.id === replyId ? { ...message, state: "error" } : message,
       );

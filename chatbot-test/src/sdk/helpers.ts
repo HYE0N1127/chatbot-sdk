@@ -35,23 +35,39 @@ export const parseSSEChunk = (chunk: string, currentBuffer: string) => {
 };
 
 const extract = (part: string): SSEEvent => {
-  const eventMatches = Array.from(part.matchAll(/(?:^|\n)event: ?(.*)/g)).map(
-    (match) => match[1],
-  );
-  const idMatches = Array.from(part.matchAll(/(?:^|\n)id: ?(.*)/g)).map(
-    (match) => match[1],
-  );
-  const retryMatches = Array.from(part.matchAll(/(?:^|\n)retry: ?(.*)/g)).map(
-    (match) => match[1],
-  );
-  const dataLines = Array.from(part.matchAll(/(?:^|\n)data: ?(.*)/g)).map(
-    (match) => match[1],
-  );
+  const lines = part.split("\n");
+
+  let eventType = "";
+  let eventId = "";
+  let retryTime = "";
+  const dataLines: string[] = [];
+
+  for (const line of lines) {
+    const colonIndex = line.indexOf(":");
+    if (colonIndex === -1) {
+      continue;
+    }
+
+    const key = line.slice(0, colonIndex);
+    const value = line.slice(colonIndex + 1).trim();
+
+    switch (key) {
+      case "event":
+        eventType = value;
+        break;
+      case "id":
+        eventId = value;
+        break;
+      case "retry":
+        retryTime = value;
+        break;
+      case "data":
+        dataLines.push(value);
+        break;
+    }
+  }
 
   const joinedData = dataLines.join("\n");
-  const eventType = eventMatches.pop() ?? "";
-  const eventId = idMatches.pop() ?? "";
-  const retryTime = retryMatches.pop() ?? "";
 
   return {
     ...(eventType && { event: eventType }),
@@ -60,3 +76,22 @@ const extract = (part: string): SSEEvent => {
     ...(joinedData && { data: joinedData }),
   };
 };
+
+const chunks = [
+  'data: {"text":"stable"}\n\ndata: {"text":"stable"}\n\n',
+  'event: test\ndata: {"text":"stable"}\n\nevent: test\ndata: {"text":"stable"}\n\n',
+  'event: test\ndata: {"text":"stable"}\nid: 123\n\nevent: test\ndata: {"text":"stable"}\nid: 123\n\n',
+  'event: test\ndata: {"text":"stable"}\nid: 123\nretry: 1000\n\nevent: test\ndata: {"text":"stable"}\nid: 123\nretry: 1000\n\n',
+];
+
+const test = () => {
+  let buffer = "";
+
+  chunks.forEach((value) => {
+    const { events, pendingBuffer } = parseSSEChunk(value, buffer);
+
+    console.log(events);
+  });
+};
+
+test();

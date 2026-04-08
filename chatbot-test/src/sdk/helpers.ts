@@ -76,22 +76,3 @@ const extract = (part: string): SSEEvent => {
     ...(joinedData && { data: joinedData }),
   };
 };
-
-const chunks = [
-  'data: {"text":"stable"}\n\ndata: {"text":"stable"}\n\n',
-  'event: test\ndata: {"text":"stable"}\n\nevent: test\ndata: {"text":"stable"}\n\n',
-  'event: test\ndata: {"text":"stable"}\nid: 123\n\nevent: test\ndata: {"text":"stable"}\nid: 123\n\n',
-  'event: test\ndata: {"text":"stable"}\nid: 123\nretry: 1000\n\nevent: test\ndata: {"text":"stable"}\nid: 123\nretry: 1000\n\n',
-];
-
-const test = () => {
-  let buffer = "";
-
-  chunks.forEach((value) => {
-    const { events, pendingBuffer } = parseSSEChunk(value, buffer);
-
-    console.log(events);
-  });
-};
-
-test();

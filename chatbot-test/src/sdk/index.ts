@@ -1,36 +1,14 @@
 import { Message } from "../type/message/index";
 import { generateId } from "../utils/id/index";
-import { Connection } from "./connection/index";
+import { ApiMessage, Connection, Payload } from "./connection/index";
+import { consumeStream } from "../utils/stream/index";
 
 export type Chunk = {
   id: string;
   content: string;
 };
 
-const consumeStream = async <T>({
-  stream,
-  onError,
-  onDone,
-}: {
-  stream: ReadableStream<T>;
-  onError?: (error: unknown) => void;
-  onDone?: () => void;
-}): Promise<void> => {
-  const reader = stream.getReader();
-
-  try {
-    while (true) {
-      const { done } = await reader.read();
-
-      if (done) {
-        onDone?.();
-        break;
-      }
-    }
-  } catch (error) {
-    onError?.(error);
-  }
-};
+type PrepareRequest = (params: { messages: ApiMessage[] }) => Payload;
 
 /**
  * AI 모델과의 스트리밍 대화를 관리하는 코어 클래스입니다.
@@ -42,28 +20,23 @@ export class Chat {
 
   private connect: Connection;
   private abortController: AbortController | null = null;
+  private prepareSendMessageRequest: PrepareRequest | null;
 
   /**
    * Chat 인스턴스를 생성합니다.
    *
    * @param options.connection - API 엔드포인트 및 통신 설정
-   * @param options.extractChunk - 응답 데이터에서 텍스트를 추출하는 함수
-   * @param options.systemPrompt - 시스템 프롬프트
+   * @param options.prepareSendMessageRequest -
    */
   constructor({
     connection,
-    systemPrompt,
+    prepareSendMessageRequest = null,
   }: {
     connection: Connection;
-    systemPrompt?: string;
+    prepareSendMessageRequest?: PrepareRequest | null;
   }) {
     this.connect = connection;
-
-    if (systemPrompt) {
-      this._messages = [
-        { id: generateId(), role: "system", content: systemPrompt },
-      ];
-    }
+    this.prepareSendMessageRequest = prepareSendMessageRequest;
   }
 
   /**
@@ -89,7 +62,7 @@ export class Chat {
     this.messages = [...this._messages, prompt];
 
     // API 전송을 위한 메시지 포맷으로 가공합니다.
-    const apiMessages = this._messages.map((msg) => ({
+    const apiMessages: ApiMessage[] = this._messages.map((msg) => ({
       role: msg.role,
       content: msg.content,
     }));
@@ -104,11 +77,12 @@ export class Chat {
     };
     this.messages = [...this._messages, pendingReply];
 
+    const payload: Payload = this.prepareSendMessageRequest
+      ? this.prepareSendMessageRequest({ messages: apiMessages })
+      : { messages: apiMessages };
+
     try {
-      const response = await this.connect(
-        { messages: apiMessages },
-        this.abortController.signal,
-      );
+      const response = await this.connect(payload, this.abortController.signal);
 
       consumeStream<Chunk>({
         stream: response.pipeThrough(
@@ -143,38 +117,6 @@ export class Chat {
       this.messages = this._messages.map((message) =>
         message.id === replyId ? { ...message, state: "error" } : message,
       );
-    }
-  };
-
-  /**
-   * 시스템 프롬프트를 교체합니다. 빈 문자열을 전달하면 시스템 메시지를 제거합니다.
-   * @param prompt - 새로운 시스템 프롬프트. 빈 문자열이면 제거합니다.
-   */
-  public modifySystemPrompt = (prompt: string) => {
-    if (this.isStreaming) {
-      console.warn("스트리밍 중에는 시스템 프롬프트를 변경할 수 없습니다.");
-      return;
-    }
-
-    const hasSystem = this._messages[0]?.role === "system";
-
-    if (!prompt) {
-      if (hasSystem) {
-        this.messages = this._messages.slice(1);
-      }
-      return;
-    }
-
-    if (hasSystem) {
-      this.messages = [
-        { ...this._messages[0], content: prompt },
-        ...this._messages.slice(1),
-      ];
-    } else {
-      this.messages = [
-        { id: generateId(), role: "system", content: prompt },
-        ...this._messages,
-      ];
     }
   };
 

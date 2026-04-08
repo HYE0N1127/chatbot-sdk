@@ -4,7 +4,7 @@ import { generateId } from "../../utils/id/index";
 
 export type Role = "system" | "user" | "assistant";
 
-type ApiMessage = {
+export type ApiMessage = {
   role: Role;
   content: string;
 };
@@ -102,7 +102,6 @@ export const createConnection = <T>(config: Config<T>): Connection => {
       return response.body.pipeThrough(new TextDecoderStream()).pipeThrough(
         new TransformStream<string, Chunk>({
           transform: (chunk, controller) => {
-            console.log(chunk);
             const { events, pendingBuffer } = parseSSEChunk(chunk, buffer);
             buffer = pendingBuffer;
 

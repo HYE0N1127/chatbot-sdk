@@ -1,12 +1,15 @@
-import { Message } from "../type/message/index";
+import {
+  Message,
+  MessageChunk,
+  MessagePart,
+  ReasoningPart,
+  TextPart,
+} from "../type/message/index";
 import { generateId } from "../utils/id/index";
 import { ApiMessage, Connection, Payload } from "./connection/index";
 import { consumeStream } from "../utils/stream/index";
 
-export type Chunk = {
-  id: string;
-  content: string;
-};
+export type ChatStatus = "ready" | "submitted" | "streaming" | "error";
 
 type PrepareRequest = (params: { messages: ApiMessage[] }) => Payload;
 
@@ -16,7 +19,11 @@ type PrepareRequest = (params: { messages: ApiMessage[] }) => Payload;
  */
 export class Chat {
   private _messages: Message[] = [];
+  private _status: ChatStatus = "ready";
+  private _error: Error | undefined;
+
   private listeners: Set<() => void> = new Set();
+  private statusListeners: Set<() => void> = new Set();
 
   private connect: Connection;
   private abortController: AbortController | null = null;
@@ -39,6 +46,33 @@ export class Chat {
     this.prepareSendMessageRequest = prepareSendMessageRequest;
   }
 
+  public setStatus = ({
+    status,
+    error,
+  }:
+    | { status: Exclude<ChatStatus, "error">; error?: undefined }
+    | { status: "error"; error: Error }) => {
+    this._status = status;
+    this._error = error;
+  };
+
+  private pushMessage = (message: Message) => {
+    this._messages.push(message);
+    this.notify();
+  };
+
+  private replaceMessage = (message: Message) => {
+    const index = this.messages.findIndex((msg) => msg.id === message.id);
+
+    this._messages = [
+      ...this.messages.slice(0, index),
+      structuredClone(message),
+      ...this.messages.slice(index + 1),
+    ];
+
+    this.notify();
+  };
+
   /**
    * 사용자 메시지를 전송하고 AI의 스트리밍 응답을 수신합니다.
    * @param input - 사용자가 입력한 질문 텍스트
@@ -52,71 +86,135 @@ export class Chat {
     this.abortController = new AbortController();
 
     // 사용자 질문을 메시지 리스트에 추가합니다.
-    const promptId = generateId();
-    const prompt: Message = {
-      id: promptId,
+    const userMessage: Message = {
+      id: generateId(),
       role: "user",
-      content: input,
+      parts: [{ type: "text", content: input }],
     };
 
-    this.messages = [...this._messages, prompt];
+    this.pushMessage(userMessage);
 
     // API 전송을 위한 메시지 포맷으로 가공합니다.
-    const apiMessages: ApiMessage[] = this._messages.map((msg) => ({
-      role: msg.role,
-      content: msg.content,
+    const apiMessages: ApiMessage[] = this._messages.map((message) => ({
+      role: message.role,
+      content: message.parts
+        .filter((part) => part.type === "text")
+        .map((part) => part.content)
+        .join("\n"),
     }));
 
-    // AI의 응답을 담을 빈 메시지를 미리 생성합니다.
-    const replyId = generateId();
-    const pendingReply: Message = {
-      id: replyId,
+    /**
+     * AI의 응답을 담을 빈 메시지를 미리 생성합니다.
+     * TODO: 스트림을 재개해야 하는 케이스에서는 assistant 메세지를 새로 생성하지 않고 기존에 생성된 걸 활용해야 함.
+     */
+    const assistantMessage: Message = {
+      id: generateId(),
       role: "assistant",
       state: "streaming",
-      content: "",
+      parts: [],
     };
-    this.messages = [...this._messages, pendingReply];
 
+    /**
+     * TODO: Connection으로 옮길것, prepareRequest로 네이밍 변경할 것
+     */
     const payload: Payload = this.prepareSendMessageRequest
       ? this.prepareSendMessageRequest({ messages: apiMessages })
       : { messages: apiMessages };
 
+    const state = {
+      message: structuredClone(assistantMessage),
+      activeTextParts: {},
+      activeReasoningParts: {},
+    } as {
+      message: Message;
+      activeTextParts: Record<string, TextPart>;
+      activeReasoningParts: Record<string, ReasoningPart>;
+    };
+
+    this.setStatus({ status: "submitted" });
+
+    const write = () => {
+      const lastMessage = this.messages[this.messages.length - 1];
+
+      if (lastMessage.id === state.message.id) {
+        this.replaceMessage(state.message);
+      } else {
+        this.pushMessage(state.message);
+      }
+    };
+
+    write();
+
     try {
       const response = await this.connect(payload, this.abortController.signal);
 
-      consumeStream<Chunk>({
+      await consumeStream<MessageChunk>({
         stream: response.pipeThrough(
           new TransformStream({
-            transform: (chunk, _) => {
-              if (chunk && chunk.content) {
-                this.messages = this._messages.map((message) =>
-                  message.id === replyId
-                    ? { ...message, content: message.content + chunk.content }
-                    : message,
-                );
+            transform: (chunk, controller) => {
+              this.setStatus({ status: "streaming" });
+
+              switch (chunk.type) {
+                case "text": {
+                  if (state.activeTextParts[chunk.id] == null) {
+                    const textPart: TextPart = {
+                      type: "text",
+                      content: "",
+                    };
+
+                    state.activeTextParts[chunk.id] = textPart;
+                    state.message.parts.push(textPart);
+                  }
+
+                  const textPart = state.activeTextParts[chunk.id];
+
+                  textPart.content += chunk.content;
+                  write();
+
+                  break;
+                }
+                case "reasoning": {
+                  if (state.activeReasoningParts[chunk.id] == null) {
+                    const reasoningPart: ReasoningPart = {
+                      type: "reasoning",
+                      content: "",
+                    };
+
+                    state.activeReasoningParts[chunk.id] = reasoningPart;
+                    state.message.parts.push(reasoningPart);
+                  }
+
+                  const reasoningPart = state.activeReasoningParts[chunk.id];
+
+                  reasoningPart.content += chunk.content;
+                  write();
+
+                  break;
+                }
+                default:
+                  return;
               }
+
+              controller.enqueue(chunk);
+            },
+            flush: () => {
+              state.message.state = "done";
+              write();
             },
           }),
         ),
-        onDone: () => {
-          this.messages = this._messages.map((message) =>
-            message.id === replyId ? { ...message, state: "done" } : message,
-          );
-        },
       });
+
+      this.setStatus({ status: "ready" });
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
         // 사용자가 직접 중단한 경우 state를 "done"으로 처리합니다.
-        this.messages = this._messages.map((message) =>
-          message.id === replyId ? { ...message, state: "done" } : message,
-        );
-
         return;
       }
 
-      this.messages = this._messages.map((message) =>
-        message.id === replyId ? { ...message, state: "error" } : message,
-      );
+      if (error instanceof Error) {
+        this.setStatus({ status: "error", error });
+      }
     }
   };
 
@@ -127,17 +225,16 @@ export class Chat {
     this.abortController?.abort();
   };
 
-  private set messages(value: Message[]) {
-    this._messages = value;
-    this.notify();
-  }
-
   public get messages(): Message[] {
     return this._messages.filter((message) => message.role !== "system");
   }
 
   public get isStreaming(): boolean {
     return this._messages.some((message) => message.state === "streaming");
+  }
+
+  public get status() {
+    return this._status;
   }
 
   /**
@@ -148,11 +245,17 @@ export class Chat {
    */
   public subscribe(listener: () => void) {
     this.listeners.add(listener);
-
     return () => {
       this.listeners.delete(listener);
     };
   }
+
+  public subscribeStatus = (listener: () => void) => {
+    this.statusListeners.add(listener);
+    return () => {
+      this.statusListeners.delete(listener);
+    };
+  };
 
   private notify() {
     this.listeners.forEach((listener) => listener());

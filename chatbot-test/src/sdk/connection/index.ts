@@ -1,6 +1,6 @@
 import { parseSSEChunk } from "../helpers";
-import { Chunk } from "../index";
 import { generateId } from "../../utils/id/index";
+import { MessageChunk } from "../../type/message/index";
 
 export type Role = "system" | "user" | "assistant";
 
@@ -36,7 +36,7 @@ export type Config<T> = {
   /** 원하는 api에 맞는 규격으로 format하는 함수를 전달받습니다. */
   formatPayload?: (payload: Payload) => unknown;
 
-  transform: (parsed: T) => string;
+  transform: (parsed: T) => MessageChunk;
 
   /** Retry 이벤트를 받아온 경우 호출되는 CallBack 함수 */
   onReconnecting?: (retryDelay: number, attempt: number) => void;
@@ -48,7 +48,7 @@ export type Config<T> = {
 export type Connection = (
   payload: Payload,
   signal?: AbortSignal,
-) => Promise<ReadableStream<Chunk>>;
+) => Promise<ReadableStream<MessageChunk>>;
 
 /**
  * 주어진 설정을 바탕으로 AI API와의 통신을 담당하는 Connection 함수를 생성합니다.
@@ -74,15 +74,21 @@ export const createConnection = <T>(config: Config<T>): Connection => {
   return async (
     payload: Payload,
     signal?: AbortSignal,
-  ): Promise<ReadableStream<Chunk>> => {
-    const { url, headers, body, formatPayload, transform } = config;
+  ): Promise<ReadableStream<MessageChunk>> => {
+    const {
+      url,
+      headers,
+      body,
+      formatPayload,
+      transform: transformChunk,
+    } = config;
     let buffer = "";
 
     const formatted = formatPayload
       ? formatPayload(payload)
       : { ...body, ...payload, stream: true };
 
-    const connect = async (): Promise<ReadableStream<Chunk>> => {
+    const connect = async (): Promise<ReadableStream<MessageChunk>> => {
       const response = await fetch(url, {
         method: "POST",
         headers: {
@@ -100,7 +106,7 @@ export const createConnection = <T>(config: Config<T>): Connection => {
       const targetId = generateId();
 
       return response.body.pipeThrough(new TextDecoderStream()).pipeThrough(
-        new TransformStream<string, Chunk>({
+        new TransformStream<string, MessageChunk>({
           transform: (chunk, controller) => {
             const { events, pendingBuffer } = parseSSEChunk(chunk, buffer);
             buffer = pendingBuffer;
@@ -109,11 +115,8 @@ export const createConnection = <T>(config: Config<T>): Connection => {
               if (event.data) {
                 try {
                   const parsed = JSON.parse(event.data) as T;
-                  const textContent = transform(parsed);
 
-                  if (textContent) {
-                    controller.enqueue({ id: targetId, content: textContent });
-                  }
+                  controller.enqueue(transformChunk(parsed));
                 } catch (e) {
                   console.warn(`JSON 파싱 에러:`, e);
                 }

@@ -1,98 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
-import { createConnection } from "./sdk/connection";
-import { Chat } from "./sdk/index";
-
-type GeminiResponse = {
-  candidates?: Array<{
-    content?: {
-      parts?: Array<{ text?: string }>;
-    };
-  }>;
-};
-
-// type OpenAIRepresentation = {
-//   choices: Array<{
-//     delta: {
-//       content?: string;
-//     };
-//     finish_reason?: string | null;
-//   }>;
-// };
-
-// type ClaudeRepresentation = {
-//   type: string;
-//   delta?: {
-//     text?: string;
-//   };
-// };
+import { useState } from "react";
+import { useChat, useMessages } from "./component/chat/hooks";
 
 function App() {
+  const chat = useChat();
+  const messages = useMessages();
   const [inputText, setInputText] = useState("");
-  const [, setTick] = useState(0);
-
-  const chat = useMemo(() => {
-    console.log(process.env.REACT_APP_GEMINI_API_KEY);
-    return new Chat({
-      connection: createConnection<GeminiResponse>({
-        url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse",
-        headers: {
-          "x-goog-api-key": process.env.REACT_APP_GEMINI_API_KEY || "",
-        },
-        formatPayload: (payload) => ({
-          contents: payload.messages.map((msg) => ({
-            role: msg.role === "assistant" ? "model" : msg.role,
-            parts: [{ text: msg.content }],
-          })),
-        }),
-        transform: (parsed) => {
-          return parsed.candidates?.[0]?.content?.parts?.[0]?.text || "";
-        },
-      }),
-    });
-  }, []);
-
-  // const chat = new Chat<OpenAIRepresentation>({
-  //   connection: createConnection({
-  //     url: "https://api.openai.com/v1/chat/completions",
-  //     headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
-  //     formatPayload: (payload) => ({
-  //       model: "gpt-4o",
-  //       messages: payload.messages,
-  //       stream: true,
-  //     }),
-  //   }),
-  //   extractChunk: (parsed) => {
-  //     return parsed.choices[0]?.delta?.content || "";
-  //   },
-  // });
-
-  // const chat = new Chat<ClaudeRepresentation>({
-  //   connection: createConnection({
-  //     url: "https://api.anthropic.com/v1/messages",
-  //     headers: {
-  //       "x-api-key": CLAUDE_API_KEY,
-  //       "anthropic-version": "2023-06-01",
-  //     },
-  //     formatPayload: (payload) => ({
-  //       model: "claude-3-5-sonnet-20240620",
-  //       max_tokens: 1024,
-  //       messages: payload.messages,
-  //       stream: true,
-  //     }),
-  //   }),
-  //   extractChunk: (parsed) => {
-  //     return parsed.type === "content_block_delta"
-  //       ? parsed.delta?.text || ""
-  //       : "";
-  //   },
-  // });
-
-  useEffect(() => {
-    const unsubscribe = chat.subscribe(() => {
-      setTick((tick) => tick + 1);
-    });
-    return unsubscribe;
-  }, [chat]);
 
   const handleSend = () => {
     if (!inputText.trim()) return;
@@ -113,17 +25,25 @@ function App() {
           gap: "10px",
         }}
       >
-        {chat.messages.map((msg) => (
-          <div
-            key={msg.id}
-            style={{
-              textAlign: msg.role === "user" ? "right" : "left",
-              color: msg.role === "user" ? "blue" : "black",
-            }}
-          >
-            <strong>{msg.role === "user" ? "나: " : "AI: "}</strong>
-            {msg.content}
-            {msg.state === "streaming" && <span> █</span>}
+        {messages.map((message) => (
+          <div key={message.id}>
+            {message.parts.map((part, index) => {
+              switch (part.type) {
+                case "text":
+                  return <p key={index}>{part.content}</p>;
+                case "reasoning":
+                  return (
+                    <details key={index}>
+                      <summary>사고 과정</summary>
+                      <div style={{ color: "gray", fontSize: "12px" }}>
+                        {part.content}
+                      </div>
+                    </details>
+                  );
+                default:
+                  return null;
+              }
+            })}
           </div>
         ))}
       </div>
@@ -134,13 +54,8 @@ function App() {
           value={inputText}
           onChange={(e) => setInputText(e.target.value)}
           onKeyDown={(e) => {
-            if (e.nativeEvent.isComposing) {
-              return;
-            }
-
-            if (e.key === "Enter") {
-              handleSend();
-            }
+            if (e.nativeEvent.isComposing) return;
+            if (e.key === "Enter") handleSend();
           }}
           style={{ flex: 1, padding: "10px" }}
           placeholder="메시지를 입력하세요..."

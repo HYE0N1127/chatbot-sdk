@@ -3,6 +3,7 @@ import { generateId } from "../../utils/id/index";
 import { MessageChunk } from "../../type/message/index";
 
 export type Role = "system" | "user" | "assistant";
+export type PrepareRequest = (params: { messages: ApiMessage[] }) => Payload;
 
 export type ApiMessage = {
   role: Role;
@@ -38,8 +39,7 @@ export type Config<T> = {
 
   transform: (parsed: T) => MessageChunk;
 
-  /** Retry 이벤트를 받아온 경우 호출되는 CallBack 함수 */
-  onReconnecting?: (retryDelay: number, attempt: number) => void;
+  prepareRequest?: PrepareRequest;
 
   /** Retry 횟수 제한 (기본값: 3) */
   limit?: number;
@@ -81,12 +81,17 @@ export const createConnection = <T>(config: Config<T>): Connection => {
       body,
       formatPayload,
       transform: transformChunk,
+      prepareRequest,
     } = config;
     let buffer = "";
 
+    const preparedPayload: Payload = prepareRequest
+      ? prepareRequest({ messages: payload.messages })
+      : payload;
+
     const formatted = formatPayload
-      ? formatPayload(payload)
-      : { ...body, ...payload, stream: true };
+      ? formatPayload(preparedPayload)
+      : { ...body, ...preparedPayload, stream: true };
 
     const connect = async (): Promise<ReadableStream<MessageChunk>> => {
       const response = await fetch(url, {
@@ -102,8 +107,6 @@ export const createConnection = <T>(config: Config<T>): Connection => {
       if (!response.ok || !response.body) {
         throw new Error(`네트워크 응답 에러: ${response.status}`);
       }
-
-      const targetId = generateId();
 
       return response.body.pipeThrough(new TextDecoderStream()).pipeThrough(
         new TransformStream<string, MessageChunk>({

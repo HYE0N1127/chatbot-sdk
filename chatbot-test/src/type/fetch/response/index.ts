@@ -4,6 +4,7 @@ export type GeminiResponse = {
       parts: {
         text: string;
         thought?: boolean;
+        functionCall?: string;
       }[];
     };
   }[];

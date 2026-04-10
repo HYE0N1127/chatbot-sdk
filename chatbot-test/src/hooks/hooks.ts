@@ -1,6 +1,6 @@
 import { useMemo, useSyncExternalStore } from "react";
-import { Chat } from "../../sdk/index";
-import { Config, createConnection } from "../../sdk/connection/index";
+import { Chat } from "../sdk/index";
+import { Config, createConnection } from "../sdk/connection/index";
 
 export const useChat = <T>({ config }: { config: Config<T> }) => {
   const chat = useMemo(

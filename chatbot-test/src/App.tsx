@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useChat } from "./component/chat/hooks";
+import { useChat } from "./hooks/hooks";
 import { GeminiResponse } from "./type/fetch/response/index";
 
 function App() {

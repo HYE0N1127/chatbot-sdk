@@ -226,7 +226,7 @@ export class Chat {
   };
 
   public get messages(): Message[] {
-    return this._messages.filter((message) => message.role !== "system");
+    return this._messages;
   }
 
   public get isStreaming(): boolean {
@@ -243,12 +243,12 @@ export class Chat {
    * @param listener - 상태 변경 시 실행될 콜백 함수
    * @returns 구독 해제를 위한 unsubscribe 함수
    */
-  public subscribe(listener: () => void) {
+  public subscribe = (listener: () => void) => {
     this.listeners.add(listener);
     return () => {
       this.listeners.delete(listener);
     };
-  }
+  };
 
   public subscribeStatus = (listener: () => void) => {
     this.statusListeners.add(listener);

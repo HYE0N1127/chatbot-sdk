@@ -1,14 +1,88 @@
 import { useState } from "react";
-import { useChat, useMessages } from "./component/chat/hooks";
+import { useChat } from "./component/chat/hooks";
+import { GeminiResponse } from "./type/fetch/response/index";
 
 function App() {
-  const chat = useChat();
-  const messages = useMessages();
+  const { messages, sendMessage, addToolOutput } = useChat<GeminiResponse>({
+    config: {
+      url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse",
+      headers: {
+        "x-goog-api-key": process.env.REACT_APP_GEMINI_API_KEY || "",
+      },
+      body: {
+        functionDeclarations: [
+          {
+            name: "get_current_temperature",
+            description: "Gets the current temperature for a given location.",
+            parameters: {
+              type: "object",
+              properties: {
+                location: {
+                  type: "string",
+                  description: "The city name, e.g. Seoul",
+                },
+              },
+              required: ["location"],
+            },
+          },
+          {
+            name: "reservation_motel",
+            description: "Reserves a motel for a given location.",
+            parameters: {
+              type: "object",
+              properties: {
+                location: {
+                  type: "string",
+                  description: "The city name, e.g. Seoul",
+                },
+              },
+              required: ["location"],
+            },
+          },
+        ],
+      },
+      prepareRequest: ({ messages }) => {
+        return {
+          body: {
+            contents: messages.map((message) => ({
+              role: message.role === "assistant" ? "model" : message.role,
+              parts: message.parts
+                .filter((part) => part.type === "text")
+                .map((part) => ({ text: part.content })),
+            })),
+            generationConfig: {
+              thinkingConfig: {
+                includeThoughts: true,
+              },
+            },
+          },
+        };
+      },
+      transform: (data) => {
+        const part = data.candidates?.[0]?.content?.parts?.[0];
+
+        return {
+          type: part.thought === true ? "reasoning" : "text",
+          id: data.responseId,
+          content: part.text,
+        };
+      },
+    },
+    // onToolCall: async (part) => {
+    //   const weather = await getWeatherInfo();
+
+    //   // addToolOutput({
+    //   //   toolCallId: part.toolCallId,
+    //   //   output: weather,
+    //   // });
+    // },
+  });
+
   const [inputText, setInputText] = useState("");
 
   const handleSend = () => {
     if (!inputText.trim()) return;
-    chat.sendMessage(inputText);
+    sendMessage({ text: inputText });
     setInputText("");
   };
 
@@ -40,6 +114,25 @@ function App() {
                       </div>
                     </details>
                   );
+                // case "tool-call": {
+                //   if (part.toolName === "get_current_temperature") {
+                //     return (
+                //       <div>
+                //         날씨를 조회해도 되겠읍니까?
+                //         <button
+                //           onClick={async () => {
+                //             // chat.~ 메서드를 호출해서, weather 를 전달하면, tool-call part 에 그 데이터가 output 이라는 필드명으로 삽입됨.
+                //           }}
+                //         >
+                //           네
+                //         </button>
+                //         <button>네니오</button>
+                //       </div>
+                //     );
+                //   }
+                //   break;
+                // }
+
                 default:
                   return null;
               }

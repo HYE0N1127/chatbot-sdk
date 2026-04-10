@@ -1,27 +1,32 @@
 import { parseSSEChunk } from "../helpers";
 import { generateId } from "../../utils/id/index";
-import { MessageChunk } from "../../type/message/index";
+import { Message, MessageChunk } from "../../type/message/index";
 
 export type Role = "system" | "user" | "assistant";
-export type PrepareRequest = (params: { messages: ApiMessage[] }) => Payload;
+
+export type PrepareRequestFunction = (options: {
+  messages: Message[];
+  body: object | undefined;
+  headers: Headers | object | undefined;
+}) =>
+  | Promise<{
+      body: object;
+      headers?: Headers | object;
+    }>
+  | {
+      body: object;
+      headers?: Headers | object;
+    };
 
 export type ApiMessage = {
   role: Role;
   content: string;
 };
 
-export type Payload = {
-  /** 사용할 AI 모델명 */
-  model?: string;
-
-  /** 대화 내역 배열 */
-  messages: ApiMessage[];
-
-  /** 스트리밍 여부 */
-  stream?: boolean;
-
-  /** 답변의 창의성 */
-  temperature?: number;
+export type ConnectionOptions = {
+  messages: Message[];
+  body: object | undefined;
+  headers: Headers | object | undefined;
 };
 
 export type Config<T> = {
@@ -34,19 +39,16 @@ export type Config<T> = {
   /** Request Body */
   body?: Record<string, unknown>;
 
-  /** 원하는 api에 맞는 규격으로 format하는 함수를 전달받습니다. */
-  formatPayload?: (payload: Payload) => unknown;
-
   transform: (parsed: T) => MessageChunk;
 
-  prepareRequest?: PrepareRequest;
+  prepareRequest?: PrepareRequestFunction;
 
   /** Retry 횟수 제한 (기본값: 3) */
   limit?: number;
 };
 
 export type Connection = (
-  payload: Payload,
+  options: ConnectionOptions,
   signal?: AbortSignal,
 ) => Promise<ReadableStream<MessageChunk>>;
 
@@ -72,35 +74,32 @@ export type Connection = (
  */
 export const createConnection = <T>(config: Config<T>): Connection => {
   return async (
-    payload: Payload,
+    options: ConnectionOptions,
     signal?: AbortSignal,
   ): Promise<ReadableStream<MessageChunk>> => {
-    const {
-      url,
-      headers,
-      body,
-      formatPayload,
-      transform: transformChunk,
-      prepareRequest,
-    } = config;
+    const { url, transform: transformChunk, prepareRequest } = config;
     let buffer = "";
 
-    const preparedPayload: Payload = prepareRequest
-      ? prepareRequest({ messages: payload.messages })
-      : payload;
+    const body = { ...config.body, ...options.body };
+    const headers = { ...config.headers, ...options.headers };
 
-    const formatted = formatPayload
-      ? formatPayload(preparedPayload)
-      : { ...body, ...preparedPayload, stream: true };
+    const prepared = await prepareRequest?.({
+      body,
+      headers,
+      messages: options.messages,
+    });
+
+    const finalBody = prepared?.body ?? body;
+    const finalHeaders = prepared?.headers ?? headers;
 
     const connect = async (): Promise<ReadableStream<MessageChunk>> => {
       const response = await fetch(url, {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
-          ...headers,
+          "Content-Type": "text/event-stream",
+          ...finalHeaders,
         },
-        body: JSON.stringify(formatted),
+        body: JSON.stringify(finalBody),
         signal,
       });
 

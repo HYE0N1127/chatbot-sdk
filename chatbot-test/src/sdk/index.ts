@@ -6,17 +6,11 @@ import {
   TextPart,
 } from "../type/message/index";
 import { generateId } from "../utils/id/index";
-import { ApiMessage, Connection, Payload } from "./connection/index";
+import { ApiMessage, Connection } from "./connection/index";
 import { consumeStream } from "../utils/stream/index";
 
 export type ChatStatus = "ready" | "submitted" | "streaming" | "error";
 
-type PrepareRequest = (params: { messages: ApiMessage[] }) => Payload;
-
-/**
- * AI 모델과의 스트리밍 대화를 관리하는 코어 클래스입니다.
- * @template T - API가 반환하는 개별 JSON 데이터의 구조
- */
 export class Chat {
   private _messages: Message[] = [];
   private _status: ChatStatus = "ready";
@@ -27,7 +21,6 @@ export class Chat {
 
   private connect: Connection;
   private abortController: AbortController | null = null;
-  private prepareSendMessageRequest: PrepareRequest | null;
 
   /**
    * Chat 인스턴스를 생성합니다.
@@ -35,15 +28,8 @@ export class Chat {
    * @param options.connection - API 엔드포인트 및 통신 설정
    * @param options.prepareSendMessageRequest -
    */
-  constructor({
-    connection,
-    prepareSendMessageRequest = null,
-  }: {
-    connection: Connection;
-    prepareSendMessageRequest?: PrepareRequest | null;
-  }) {
+  constructor({ connection }: { connection: Connection }) {
     this.connect = connection;
-    this.prepareSendMessageRequest = prepareSendMessageRequest;
   }
 
   public setStatus = ({
@@ -73,11 +59,21 @@ export class Chat {
     this.notify();
   };
 
+  public addToolOutput = async () => {};
+
   /**
    * 사용자 메시지를 전송하고 AI의 스트리밍 응답을 수신합니다.
    * @param input - 사용자가 입력한 질문 텍스트
    */
-  public sendMessage = async (input: string) => {
+  public sendMessage = async ({
+    text,
+    body,
+    headers,
+  }: {
+    text: string;
+    body?: object;
+    headers?: Headers | object;
+  }) => {
     if (this.isStreaming) {
       console.warn("이미 스트리밍 중입니다. 완료 후 다시 시도해주세요.");
       return;
@@ -89,7 +85,7 @@ export class Chat {
     const userMessage: Message = {
       id: generateId(),
       role: "user",
-      parts: [{ type: "text", content: input }],
+      parts: [{ type: "text", content: text }],
     };
 
     this.pushMessage(userMessage);
@@ -113,13 +109,6 @@ export class Chat {
       state: "streaming",
       parts: [],
     };
-
-    /**
-     * TODO: Connection으로 옮길것, prepareRequest로 네이밍 변경할 것
-     */
-    const payload: Payload = this.prepareSendMessageRequest
-      ? this.prepareSendMessageRequest({ messages: apiMessages })
-      : { messages: apiMessages };
 
     const state = {
       message: structuredClone(assistantMessage),
@@ -146,7 +135,14 @@ export class Chat {
     write();
 
     try {
-      const response = await this.connect(payload, this.abortController.signal);
+      const response = await this.connect(
+        {
+          messages: this.messages,
+          body,
+          headers,
+        },
+        this.abortController.signal,
+      );
 
       await consumeStream<MessageChunk>({
         stream: response.pipeThrough(
@@ -191,6 +187,11 @@ export class Chat {
 
                   break;
                 }
+                // case "tool-call": {
+                //   // tool-call chunk 를 part 로 만들어서 assistant 메세지에 삽입.
+                //   // onToolCall?.(toolCallPart);
+                //   break;
+                // }
                 default:
                   return;
               }
@@ -243,7 +244,7 @@ export class Chat {
    * @param listener - 상태 변경 시 실행될 콜백 함수
    * @returns 구독 해제를 위한 unsubscribe 함수
    */
-  public subscribe = (listener: () => void) => {
+  public subscribeMessages = (listener: () => void) => {
     this.listeners.add(listener);
     return () => {
       this.listeners.delete(listener);

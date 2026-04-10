@@ -15,7 +15,16 @@ export type ReasoningPart = {
   content: string;
 };
 
+// export type ToolCallPart = {
+//   type: "tool-call";
+//   toolCallId: string;
+//   toolName: string;
+//   input: Record<string, unknown>;
+//   output?: Record<string, unknown>;
+// };
+
 export type MessagePart = TextPart | ReasoningPart;
+// export type MessagePart = TextPart | ReasoningPart | ToolCallPart;
 
 export type MessageChunk =
   | {
@@ -28,3 +37,15 @@ export type MessageChunk =
       id: string;
       content: string;
     };
+// | {
+//     type: "tool-call";
+//     toolCallId: string;
+//     toolName: string;
+
+//     /**
+//      * {
+//      *   location: '서울',
+//      * }
+//      */
+//     input: Record<string, unknown>;
+//   };

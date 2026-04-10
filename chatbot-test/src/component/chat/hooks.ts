@@ -1,32 +1,29 @@
-import { useContext, useSyncExternalStore } from "react";
-import { ChatContext } from "./contexts";
+import { useMemo, useSyncExternalStore } from "react";
+import { Chat } from "../../sdk/index";
+import { Config, createConnection } from "../../sdk/connection/index";
 
-export const useChat = () => {
-  const context = useContext(ChatContext);
+export const useChat = <T>({ config }: { config: Config<T> }) => {
+  const chat = useMemo(
+    () => new Chat({ connection: createConnection<T>(config) }),
+    [],
+  );
 
-  if (context == null) {
-    throw new Error("useChatStatus must be used within a ChatContext");
-  }
-
-  return context;
-};
-
-export const useChatStatus = () => {
-  const chat = useChat();
-
-  return useSyncExternalStore(
+  const status = useSyncExternalStore(
     chat.subscribeStatus,
     () => chat.status,
     () => chat.status,
   );
-};
 
-export const useMessages = () => {
-  const chat = useChat();
-
-  return useSyncExternalStore(
-    chat.subscribe,
+  const messages = useSyncExternalStore(
+    chat.subscribeMessages,
     () => chat.messages,
     () => chat.messages,
   );
+
+  return {
+    status,
+    messages,
+    sendMessage: chat.sendMessage,
+    addToolOutput: chat.addToolOutput,
+  };
 };

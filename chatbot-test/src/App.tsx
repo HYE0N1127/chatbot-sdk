@@ -1,6 +1,12 @@
 import { useState } from "react";
 import { useChat } from "./hooks/hooks";
 import { GeminiResponse } from "./type/fetch/response/index";
+import {
+  MessageChunk,
+  MessagePart,
+  TextPart,
+  ToolCallPart,
+} from "./type/message/index";
 
 function App() {
   const { messages, sendMessage, addToolOutput } = useChat<GeminiResponse>({
@@ -10,44 +16,36 @@ function App() {
         "x-goog-api-key": process.env.REACT_APP_GEMINI_API_KEY || "",
       },
       body: {
-        functionDeclarations: [
+        tools: [
           {
-            name: "get_current_temperature",
-            description: "Gets the current temperature for a given location.",
-            parameters: {
-              type: "object",
-              properties: {
-                location: {
-                  type: "string",
-                  description: "The city name, e.g. Seoul",
+            functionDeclarations: [
+              {
+                name: "get_current_temperature",
+                description:
+                  "Gets the current temperature for a given location.",
+                parameters: {
+                  type: "object",
+                  properties: {
+                    location: {
+                      type: "string",
+                      description: "The city name, e.g. Seoul",
+                    },
+                  },
+                  required: ["location"],
                 },
               },
-              required: ["location"],
-            },
-          },
-          {
-            name: "reservation_motel",
-            description: "Reserves a motel for a given location.",
-            parameters: {
-              type: "object",
-              properties: {
-                location: {
-                  type: "string",
-                  description: "The city name, e.g. Seoul",
-                },
-              },
-              required: ["location"],
-            },
+            ],
           },
         ],
       },
-      prepareRequest: ({ messages }) => {
+      prepareRequest: ({ messages, body }) => {
         return {
           body: {
+            ...body,
             contents: messages.map((message) => ({
               role: message.role === "assistant" ? "model" : message.role,
               parts: message.parts
-                .filter((part) => part.type === "text")
+                .filter((part): part is TextPart => part.type === "text")
                 .map((part) => ({ text: part.content })),
             })),
             generationConfig: {
@@ -61,21 +59,28 @@ function App() {
       transform: (data) => {
         const part = data.candidates?.[0]?.content?.parts?.[0];
 
-        return {
-          type: part.thought === true ? "reasoning" : "text",
-          id: data.responseId,
-          content: part.text,
-        };
+        if (part.functionCall) {
+          return {
+            type: "tool-call",
+            toolCallId: data.responseId,
+            toolName: part.functionCall.name,
+            input: part.functionCall.args,
+          } as MessageChunk;
+        } else {
+          return {
+            type: part.thought ? "reasoning" : "text",
+            id: data.responseId,
+            content: part.text,
+          };
+        }
       },
     },
-    // onToolCall: async (part) => {
-    //   const weather = await getWeatherInfo();
-
-    //   // addToolOutput({
-    //   //   toolCallId: part.toolCallId,
-    //   //   output: weather,
-    //   // });
-    // },
+    onToolCall: async (part: ToolCallPart) => {
+      /**
+       * onToolCall은 유저의 승인을 받을 때 사용하는 것이 아닌, 유저의 경험을 위해 자동적으로 LLM의 데이터를 인터셉트하는 과정에서
+       * 사용되는 함수.
+       */
+    },
   });
 
   const [inputText, setInputText] = useState("");
@@ -84,6 +89,10 @@ function App() {
     if (!inputText.trim()) return;
     sendMessage({ text: inputText });
     setInputText("");
+  };
+
+  const getWeatherInfo = async (): Promise<Record<string, unknown>> => {
+    return { temperature: 24, location: "Seoul" };
   };
 
   return (
@@ -114,24 +123,37 @@ function App() {
                       </div>
                     </details>
                   );
-                // case "tool-call": {
-                //   if (part.toolName === "get_current_temperature") {
-                //     return (
-                //       <div>
-                //         날씨를 조회해도 되겠읍니까?
-                //         <button
-                //           onClick={async () => {
-                //             // chat.~ 메서드를 호출해서, weather 를 전달하면, tool-call part 에 그 데이터가 output 이라는 필드명으로 삽입됨.
-                //           }}
-                //         >
-                //           네
-                //         </button>
-                //         <button>네니오</button>
-                //       </div>
-                //     );
-                //   }
-                //   break;
-                // }
+                case "tool-call": {
+                  if (part.toolName === "get_current_temperature") {
+                    if (part.output) {
+                      return (
+                        <div style={{ color: "green", fontSize: "14px" }}>
+                          날씨 조회 완료 (결과: {JSON.stringify(part.output)})
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div>
+                        날씨를 조회해도 되겠읍니까?
+                        <button
+                          onClick={async () => {
+                            const weather = await getWeatherInfo();
+
+                            addToolOutput({
+                              ...part,
+                              output: weather,
+                            });
+                          }}
+                        >
+                          네
+                        </button>
+                        <button>네니오</button>
+                      </div>
+                    );
+                  }
+                  break;
+                }
 
                 default:
                   return null;

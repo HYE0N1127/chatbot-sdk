@@ -1,10 +1,17 @@
 import { useMemo, useSyncExternalStore } from "react";
 import { Chat } from "../sdk/index";
 import { Config, createConnection } from "../sdk/connection/index";
+import { ToolCallPart } from "../type/message/index";
 
-export const useChat = <T>({ config }: { config: Config<T> }) => {
+export const useChat = <T>({
+  config,
+  onToolCall,
+}: {
+  config: Config<T>;
+  onToolCall: (part: ToolCallPart) => void;
+}) => {
   const chat = useMemo(
-    () => new Chat({ connection: createConnection<T>(config) }),
+    () => new Chat({ connection: createConnection<T>(config), onToolCall }),
     [],
   );
 

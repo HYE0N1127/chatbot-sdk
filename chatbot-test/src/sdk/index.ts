@@ -4,9 +4,10 @@ import {
   MessagePart,
   ReasoningPart,
   TextPart,
+  ToolCallPart,
 } from "../type/message/index";
 import { generateId } from "../utils/id/index";
-import { ApiMessage, Connection } from "./connection/index";
+import { Connection } from "./connection/index";
 import { consumeStream } from "../utils/stream/index";
 
 export type ChatStatus = "ready" | "submitted" | "streaming" | "error";
@@ -19,6 +20,8 @@ export class Chat {
   private listeners: Set<() => void> = new Set();
   private statusListeners: Set<() => void> = new Set();
 
+  private onToolCall?: (part: ToolCallPart) => void;
+
   private connect: Connection;
   private abortController: AbortController | null = null;
 
@@ -28,7 +31,14 @@ export class Chat {
    * @param options.connection - API 엔드포인트 및 통신 설정
    * @param options.prepareSendMessageRequest -
    */
-  constructor({ connection }: { connection: Connection }) {
+  constructor({
+    connection,
+    onToolCall,
+  }: {
+    connection: Connection;
+    onToolCall?: (part: ToolCallPart) => void;
+  }) {
+    this.onToolCall = onToolCall;
     this.connect = connection;
   }
 
@@ -59,7 +69,37 @@ export class Chat {
     this.notify();
   };
 
-  public addToolOutput = async () => {};
+  /**
+   * Tool-Call로 받은 요청을 LLM에 전달하는 함수
+   */
+  public addToolOutput = async ({ toolCallId, output }: ToolCallPart) => {
+    const lastMessage = this._messages[this._messages.length - 1];
+
+    if (lastMessage == null) {
+      return;
+    }
+
+    if (!lastMessage.parts.find((part) => part.type === "tool-call")) {
+      return;
+    }
+
+    const updatedParts: MessagePart[] = lastMessage.parts.map((part) => {
+      if (part.type === "tool-call" && part.toolCallId === toolCallId) {
+        return {
+          ...part,
+          output,
+        };
+      }
+      return part;
+    });
+
+    const updatedMessage: Message = {
+      ...lastMessage,
+      parts: updatedParts,
+    };
+
+    this.replaceMessage(updatedMessage);
+  };
 
   /**
    * 사용자 메시지를 전송하고 AI의 스트리밍 응답을 수신합니다.
@@ -70,7 +110,7 @@ export class Chat {
     body,
     headers,
   }: {
-    text: string;
+    text?: string;
     body?: object;
     headers?: Headers | object;
   }) => {
@@ -82,22 +122,24 @@ export class Chat {
     this.abortController = new AbortController();
 
     // 사용자 질문을 메시지 리스트에 추가합니다.
-    const userMessage: Message = {
-      id: generateId(),
-      role: "user",
-      parts: [{ type: "text", content: text }],
-    };
+    if (text != null) {
+      const userMessage: Message = {
+        id: generateId(),
+        role: "user",
+        parts: [{ type: "text", content: text }],
+      };
 
-    this.pushMessage(userMessage);
+      this.pushMessage(userMessage);
+    }
 
     // API 전송을 위한 메시지 포맷으로 가공합니다.
-    const apiMessages: ApiMessage[] = this._messages.map((message) => ({
-      role: message.role,
-      content: message.parts
-        .filter((part) => part.type === "text")
-        .map((part) => part.content)
-        .join("\n"),
-    }));
+    // const apiMessages: ApiMessage[] = this._messages.map((message) => ({
+    //   role: message.role,
+    //   content: message.parts
+    //     .filter((part) => part.type === "text")
+    //     .map((part) => part.content)
+    //     .join("\n"),
+    // }));
 
     /**
      * AI의 응답을 담을 빈 메시지를 미리 생성합니다.
@@ -114,18 +156,20 @@ export class Chat {
       message: structuredClone(assistantMessage),
       activeTextParts: {},
       activeReasoningParts: {},
+      activeToolCallParts: {},
     } as {
       message: Message;
       activeTextParts: Record<string, TextPart>;
       activeReasoningParts: Record<string, ReasoningPart>;
+      activeToolCallParts: Record<string, ToolCallPart>;
     };
 
     this.setStatus({ status: "submitted" });
 
     const write = () => {
-      const lastMessage = this.messages[this.messages.length - 1];
+      const isExist = this.messages.some((msg) => msg.id === state.message.id);
 
-      if (lastMessage.id === state.message.id) {
+      if (isExist) {
         this.replaceMessage(state.message);
       } else {
         this.pushMessage(state.message);
@@ -187,11 +231,27 @@ export class Chat {
 
                   break;
                 }
-                // case "tool-call": {
-                //   // tool-call chunk 를 part 로 만들어서 assistant 메세지에 삽입.
-                //   // onToolCall?.(toolCallPart);
-                //   break;
-                // }
+                case "tool-call": {
+                  const toolCallPart: ToolCallPart = {
+                    type: "tool-call",
+                    toolCallId: chunk.toolCallId,
+                    toolName: chunk.toolName,
+                    input: chunk.input,
+                  };
+
+                  // tool-call chunk 를 part 로 만들어서 assistant 메세지에 삽입.
+                  this.pushMessage({
+                    id: generateId(),
+                    role: "assistant",
+                    state: "done",
+                    parts: [toolCallPart],
+                  });
+
+                  write();
+
+                  this.onToolCall?.(toolCallPart);
+                  break;
+                }
                 default:
                   return;
               }

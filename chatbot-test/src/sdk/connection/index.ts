@@ -110,6 +110,7 @@ export const createConnection = <T>(config: Config<T>): Connection => {
       return response.body.pipeThrough(new TextDecoderStream()).pipeThrough(
         new TransformStream<string, MessageChunk>({
           transform: (chunk, controller) => {
+            console.log(chunk);
             const { events, pendingBuffer } = parseSSEChunk(chunk, buffer);
             buffer = pendingBuffer;
 
@@ -117,6 +118,8 @@ export const createConnection = <T>(config: Config<T>): Connection => {
               if (event.data) {
                 try {
                   const parsed = JSON.parse(event.data) as T;
+
+                  console.log(transformChunk(parsed));
 
                   controller.enqueue(transformChunk(parsed));
                 } catch (e) {

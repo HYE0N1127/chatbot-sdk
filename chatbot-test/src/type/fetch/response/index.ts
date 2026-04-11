@@ -4,7 +4,11 @@ export type GeminiResponse = {
       parts: {
         text: string;
         thought?: boolean;
-        functionCall?: string;
+        functionCall?: {
+          name: string;
+          args: Record<string, unknown>;
+          id?: string;
+        };
       }[];
     };
   }[];

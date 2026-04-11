@@ -76,3 +76,43 @@ const extract = (part: string): SSEEvent => {
     ...(joinedData && { data: joinedData }),
   };
 };
+
+/**
+ data: {
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "functionCall": {
+              "name": "get_current_temperature",
+              "args": {
+                "location": "서울"
+              }
+            },
+            "thoughtSignature": "CiQBvj72+6HI8+eJU+HjXyUghM3MM47797x9IOCmyx0odxqx3BsKcQG+Pvb7Y1SKCAiwM3iWJpdHAx+Mx6Bii6Geb4gF9hAYRZQLUVQA3+410bGytrXucc7LkgA9oPgFgGIxOWcEOZNVUm93hhWXuRLO2zaduEtb+Uai2LHiwgK7MiSUcm9x2WaDQRGBmcAHnqxkfUhblLL2Cn8Bvj72+9rcvBHAh9Dz6+dPIECIBheD078daXnWa1+DnqqZTJevaxRKoYDQhlT0vpSP02RPovBrh+TBtwLliB9ngM5SP4qZVzt6bDp+sHnG9taRmBKLp5Se3T9NxUTrSDp739VILeRMXqcs6r0p42e46w/loB1LuqLqx5aEvATg"
+          }
+        ],
+        "role": "model"
+      },
+      "finishReason": "STOP",
+      "index": 0,
+      "finishMessage": "Model generated function call(s)."
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 61,
+    "candidatesTokenCount": 16,
+    "totalTokenCount": 116,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 61
+      }
+    ],
+    "thoughtsTokenCount": 39
+  },
+  "modelVersion": "gemini-2.5-flash",
+  "responseId": "EEXaacWqN_Ge0-kP-YCFeQ"
+}
+ */

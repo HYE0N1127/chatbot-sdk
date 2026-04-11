@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useChat } from "./hooks/hooks";
 import { GeminiResponse } from "./type/fetch/response/index";
 import { MessageChunk, ToolCallPart } from "./type/message/index";
+import { GeminiContent, GeminiPart } from "./type/fetch/request/index";
 
 function App() {
   const { messages, sendMessage, addToolOutput } = useChat<GeminiResponse>({
@@ -34,39 +35,77 @@ function App() {
         ],
       },
       prepareRequest: ({ messages, body }) => {
-        return {
-          body: {
-            ...body,
-            contents: messages.map((message) => ({
-              role: message.role === "assistant" ? "model" : "user",
-              parts: message.parts.map((part) => {
-                if (part.type === "text") {
-                  return { text: part.content };
-                }
-                if (part.type === "tool-call") {
-                  /**
-                   * 유저가 Tool-Call 요청을 받은 이후, 데이터를 output에 저장했다면 데이터를 아래의 형태로 format합니다.
-                   */
-                  if (part.output) {
-                    return {
-                      functionResponse: {
-                        id: part.toolCallId,
-                        name: part.toolName,
-                        response: part.output,
-                      },
-                    };
+        const contents: GeminiContent[] = [];
+
+        messages.forEach((message) => {
+          switch (message.role) {
+            case "user": {
+              const userParts = message.parts
+                .map((part): GeminiPart | null => {
+                  if (part.type === "text") {
+                    return { text: part.content || "" };
                   }
-                  return {
+                  return null;
+                })
+                .filter((part): part is GeminiPart => part !== null);
+
+              if (userParts.length > 0) {
+                contents.push({
+                  role: "user",
+                  parts: userParts,
+                });
+              }
+              break;
+            }
+
+            case "assistant": {
+              /**
+               * Gemini는 Function-Call 사용 시 user Role에서 functionResponse 필드를, model Role에서 functionCall 필드를 갖고 있어야 하기에
+               * 이를 partOutput이 존재하는지 여부를 거쳐 userRole로 추가합니다.
+               */
+              const modelParts: GeminiPart[] = [];
+              const userResponseParts: GeminiPart[] = [];
+
+              message.parts.forEach((part) => {
+                if (part.type === "text") {
+                  modelParts.push({ text: part.content });
+                } else if (part.type === "tool-call") {
+                  modelParts.push({
                     functionCall: {
                       id: part.toolCallId,
                       name: part.toolName,
                       args: part.input,
                     },
-                  };
+                  });
+
+                  if (part.output) {
+                    userResponseParts.push({
+                      functionResponse: {
+                        id: part.toolCallId,
+                        name: part.toolName,
+                        response: part.output,
+                      },
+                    });
+                  }
                 }
-                return null;
-              }),
-            })),
+              });
+
+              // 한 청크에 여러 Parts의 데이터가 존재하는 경우를 대비합니다.
+              if (modelParts.length > 0) {
+                contents.push({ role: "model", parts: modelParts });
+              }
+              if (userResponseParts.length > 0) {
+                contents.push({ role: "user", parts: userResponseParts });
+              }
+              break;
+            }
+          }
+        });
+
+        return {
+          body: {
+            ...body,
+            contents: contents,
             generationConfig: {
               thinkingConfig: { includeThoughts: true },
             },
@@ -96,7 +135,6 @@ function App() {
       /**
        * onToolCall은 유저의 승인을 받을 때 사용하는 것이 아닌, 유저의 경험을 위해 자동적으로 LLM의 데이터를 인터셉트하는 과정에서 사용되는 함수.
        */
-
       switch (part.toolName) {
         case "get_current_temperature": {
           const weather = await getWeatherInfo();
@@ -121,7 +159,10 @@ function App() {
   const [inputText, setInputText] = useState("");
 
   const handleSend = () => {
-    if (!inputText.trim()) return;
+    if (!inputText.trim()) {
+      return;
+    }
+
     sendMessage({ text: inputText });
     setInputText("");
   };
@@ -165,8 +206,12 @@ function App() {
                   );
                 case "tool-call": {
                   if (part.toolName === "get_current_temperature") {
+                    if (part.output) {
+                      return null;
+                    }
+
                     return (
-                      <div>
+                      <div key={index}>
                         날씨를 조회해도 되겠읍니까?
                         <button
                           onClick={async () => {

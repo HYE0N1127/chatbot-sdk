@@ -1,5 +1,4 @@
 import { parseSSEChunk } from "../helpers";
-import { generateId } from "../../utils/id/index";
 import { Message, MessageChunk } from "../../type/message/index";
 
 export type Role = "system" | "user" | "assistant";

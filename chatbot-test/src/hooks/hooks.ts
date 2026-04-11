@@ -11,7 +11,11 @@ export const useChat = <T>({
   onToolCall: (part: ToolCallPart) => void;
 }) => {
   const chat = useMemo(
-    () => new Chat({ connection: createConnection<T>(config), onToolCall }),
+    () =>
+      new Chat({
+        connection: createConnection<T>(config),
+        onToolCall,
+      }),
     [],
   );
 

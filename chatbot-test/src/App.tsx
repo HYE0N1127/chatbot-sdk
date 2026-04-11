@@ -1,12 +1,7 @@
 import { useState } from "react";
 import { useChat } from "./hooks/hooks";
 import { GeminiResponse } from "./type/fetch/response/index";
-import {
-  MessageChunk,
-  MessagePart,
-  TextPart,
-  ToolCallPart,
-} from "./type/message/index";
+import { MessageChunk, ToolCallPart } from "./type/message/index";
 
 function App() {
   const { messages, sendMessage, addToolOutput } = useChat<GeminiResponse>({
@@ -43,15 +38,37 @@ function App() {
           body: {
             ...body,
             contents: messages.map((message) => ({
-              role: message.role === "assistant" ? "model" : message.role,
-              parts: message.parts
-                .filter((part): part is TextPart => part.type === "text")
-                .map((part) => ({ text: part.content })),
+              role: message.role === "assistant" ? "model" : "user",
+              parts: message.parts.map((part) => {
+                if (part.type === "text") {
+                  return { text: part.content };
+                }
+                if (part.type === "tool-call") {
+                  /**
+                   * 유저가 Tool-Call 요청을 받은 이후, 데이터를 output에 저장했다면 데이터를 아래의 형태로 format합니다.
+                   */
+                  if (part.output) {
+                    return {
+                      functionResponse: {
+                        id: part.toolCallId,
+                        name: part.toolName,
+                        response: part.output,
+                      },
+                    };
+                  }
+                  return {
+                    functionCall: {
+                      id: part.toolCallId,
+                      name: part.toolName,
+                      args: part.input,
+                    },
+                  };
+                }
+                return null;
+              }),
             })),
             generationConfig: {
-              thinkingConfig: {
-                includeThoughts: true,
-              },
+              thinkingConfig: { includeThoughts: true },
             },
           },
         };
@@ -77,9 +94,27 @@ function App() {
     },
     onToolCall: async (part: ToolCallPart) => {
       /**
-       * onToolCall은 유저의 승인을 받을 때 사용하는 것이 아닌, 유저의 경험을 위해 자동적으로 LLM의 데이터를 인터셉트하는 과정에서
-       * 사용되는 함수.
+       * onToolCall은 유저의 승인을 받을 때 사용하는 것이 아닌, 유저의 경험을 위해 자동적으로 LLM의 데이터를 인터셉트하는 과정에서 사용되는 함수.
        */
+
+      switch (part.toolName) {
+        case "get_current_temperature": {
+          const weather = await getWeatherInfo();
+
+          await addToolOutput({
+            ...part,
+            output: weather,
+          });
+          break;
+        }
+
+        default: {
+          console.log("default");
+          break;
+        }
+      }
+
+      sendMessage({});
     },
   });
 
@@ -92,7 +127,12 @@ function App() {
   };
 
   const getWeatherInfo = async (): Promise<Record<string, unknown>> => {
-    return { temperature: 24, location: "Seoul" };
+    return {
+      temperature: 24,
+      location: "Seoul",
+      chancePrecipitation: "56%",
+      cloudConditions: "partlyCloudy",
+    };
   };
 
   return (
@@ -125,14 +165,6 @@ function App() {
                   );
                 case "tool-call": {
                   if (part.toolName === "get_current_temperature") {
-                    if (part.output) {
-                      return (
-                        <div style={{ color: "green", fontSize: "14px" }}>
-                          날씨 조회 완료 (결과: {JSON.stringify(part.output)})
-                        </div>
-                      );
-                    }
-
                     return (
                       <div>
                         날씨를 조회해도 되겠읍니까?
@@ -140,10 +172,12 @@ function App() {
                           onClick={async () => {
                             const weather = await getWeatherInfo();
 
-                            addToolOutput({
+                            await addToolOutput({
                               ...part,
                               output: weather,
                             });
+
+                            sendMessage({});
                           }}
                         >
                           네

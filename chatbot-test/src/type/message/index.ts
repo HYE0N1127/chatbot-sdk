@@ -21,8 +21,7 @@ export type ToolCallPart = {
   toolName: string;
   input: Record<string, unknown>;
   /**
-   * 우리가 LLM에게 주는 결과값.
-   * Tool-Call 요청이 input을 통해 들어오고, 우리는 Output을 통해 내보내야함. 이는 addToolOutput을 통해 데이터가 채워질 예정임.
+   * tool-call 요청이 들어오고 외부 함수를 호출 한 결과값을 담을 객체
    */
   output?: Record<string, unknown>;
 };

@@ -239,17 +239,15 @@ export class Chat {
                     input: chunk.input,
                   };
 
-                  // tool-call chunk 를 part 로 만들어서 assistant 메세지에 삽입.
-                  this.pushMessage({
-                    id: generateId(),
-                    role: "assistant",
-                    state: "done",
-                    parts: [toolCallPart],
-                  });
-
+                  state.message.parts.push(toolCallPart);
                   write();
 
-                  this.onToolCall?.(toolCallPart);
+                  /**
+                   * TODO: 유저에게 선택권을 넘기는 과정에선 문제가 없지만, 유저에게 Tool-Call 선택권을 주지 않는 경우에는 스트리밍을 진행하는 도중에 스트리밍 요청을 보내게 됨.
+                   * 이는 스트림이 순차적으로 처리가 되지 못 할 수도 있고, 순서 또한 섞일 수 있는 문제가 있음.
+                   * vercel/ai sdk 에서는 jobExecutor를 통해서 이중 스트리밍을 방지하고 순서에 맞는 진행을 하는 것 같음.
+                   */
+                  // this.onToolCall?.(toolCallPart);
                   break;
                 }
                 default:

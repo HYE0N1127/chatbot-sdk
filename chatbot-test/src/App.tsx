@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useChat } from "./hooks/hooks";
 import { GeminiResponse } from "./type/fetch/response/index";
 import { MessageChunk, ToolCallPart } from "./type/message/index";
@@ -151,10 +151,12 @@ function App() {
           break;
         }
       }
-
-      sendMessage({});
     },
   });
+
+  useEffect(() => {
+    console.log(messages);
+  }, [messages]);
 
   const [inputText, setInputText] = useState("");
 
@@ -204,35 +206,35 @@ function App() {
                       </div>
                     </details>
                   );
-                case "tool-call": {
-                  if (part.toolName === "get_current_temperature") {
-                    if (part.output) {
-                      return null;
-                    }
+                // case "tool-call": {
+                //   if (part.toolName === "get_current_temperature") {
+                //     if (part.output) {
+                //       return null;
+                //     }
 
-                    return (
-                      <div key={index}>
-                        날씨를 조회해도 되겠읍니까?
-                        <button
-                          onClick={async () => {
-                            const weather = await getWeatherInfo();
+                //     return (
+                //       <div key={index}>
+                //         날씨를 조회해도 되겠읍니까?
+                //         <button
+                //           onClick={async () => {
+                //             const weather = await getWeatherInfo();
 
-                            await addToolOutput({
-                              ...part,
-                              output: weather,
-                            });
+                //             await addToolOutput({
+                //               ...part,
+                //               output: weather,
+                //             });
 
-                            sendMessage({});
-                          }}
-                        >
-                          네
-                        </button>
-                        <button>네니오</button>
-                      </div>
-                    );
-                  }
-                  break;
-                }
+                //             sendMessage({});
+                //           }}
+                //         >
+                //           네
+                //         </button>
+                //         <button>네니오</button>
+                //       </div>
+                //     );
+                //   }
+                //   break;
+                // }
 
                 default:
                   return null;

@@ -9,8 +9,17 @@ import {
 import { generateId } from "../utils/id/index";
 import { Connection } from "./connection/index";
 import { consumeStream } from "../utils/stream/index";
+import {
+  createStreamingMessageState,
+  StreamingMessageState,
+} from "./create-streaming-message-state";
 
 export type ChatStatus = "ready" | "submitted" | "streaming" | "error";
+
+export type ActiveResponse = {
+  state: StreamingMessageState;
+  abortController: AbortController;
+};
 
 export class Chat {
   private _messages: Message[] = [];
@@ -20,10 +29,12 @@ export class Chat {
   private listeners: Set<() => void> = new Set();
   private statusListeners: Set<() => void> = new Set();
 
-  private onToolCall?: (part: ToolCallPart) => void;
+  private onToolCall?: (part: ToolCallPart) => Promise<void> | void;
 
   private connect: Connection;
-  private abortController: AbortController | null = null;
+  private activeResponse: ActiveResponse | undefined;
+
+  private queue: (() => Promise<void>)[] = [];
 
   /**
    * Chat 인스턴스를 생성합니다.
@@ -93,12 +104,29 @@ export class Chat {
       return part;
     });
 
+    if (this.activeResponse != null) {
+      this.activeResponse.state.message = {
+        ...this.activeResponse.state.message,
+        parts: updatedParts,
+      };
+    }
+
     const updatedMessage: Message = {
       ...lastMessage,
       parts: updatedParts,
     };
 
     this.replaceMessage(updatedMessage);
+
+    const job = async (): Promise<void> => {
+      await this.request();
+    };
+
+    if (this.status !== "submitted" && this.status !== "streaming") {
+      job();
+    } else {
+      this.queue.push(job);
+    }
   };
 
   /**
@@ -110,69 +138,48 @@ export class Chat {
     body,
     headers,
   }: {
-    text?: string;
+    text: string;
     body?: object;
     headers?: Headers | object;
   }) => {
-    if (this.isStreaming) {
-      console.warn("이미 스트리밍 중입니다. 완료 후 다시 시도해주세요.");
-      return;
-    }
-
-    this.abortController = new AbortController();
-
     // 사용자 질문을 메시지 리스트에 추가합니다.
-    if (text != null) {
-      const userMessage: Message = {
-        id: generateId(),
-        role: "user",
-        parts: [{ type: "text", content: text }],
-      };
-
-      this.pushMessage(userMessage);
-    }
-
-    // API 전송을 위한 메시지 포맷으로 가공합니다.
-    // const apiMessages: ApiMessage[] = this._messages.map((message) => ({
-    //   role: message.role,
-    //   content: message.parts
-    //     .filter((part) => part.type === "text")
-    //     .map((part) => part.content)
-    //     .join("\n"),
-    // }));
-
-    /**
-     * AI의 응답을 담을 빈 메시지를 미리 생성합니다.
-     * TODO: 스트림을 재개해야 하는 케이스에서는 assistant 메세지를 새로 생성하지 않고 기존에 생성된 걸 활용해야 함.
-     */
-    const assistantMessage: Message = {
+    const userMessage: Message = {
       id: generateId(),
-      role: "assistant",
-      state: "streaming",
-      parts: [],
+      role: "user",
+      parts: [{ type: "text", content: text }],
     };
 
-    const state = {
-      message: structuredClone(assistantMessage),
-      activeTextParts: {},
-      activeReasoningParts: {},
-      activeToolCallParts: {},
-    } as {
-      message: Message;
-      activeTextParts: Record<string, TextPart>;
-      activeReasoningParts: Record<string, ReasoningPart>;
-      activeToolCallParts: Record<string, ToolCallPart>;
-    };
+    this.pushMessage(userMessage);
+    this.request({ body, headers });
+  };
 
+  private request = async ({
+    body,
+    headers,
+  }: {
+    body?: object;
+    headers?: Headers | object;
+  } = {}) => {
     this.setStatus({ status: "submitted" });
 
-    const write = () => {
-      const isExist = this.messages.some((msg) => msg.id === state.message.id);
+    this.activeResponse = {
+      state: createStreamingMessageState({
+        lastMessage: this.messages[this.messages.length - 1],
+      }),
+      abortController: new AbortController(),
+    };
 
-      if (isExist) {
-        this.replaceMessage(state.message);
+    const write = () => {
+      if (this.activeResponse == null) {
+        return;
+      }
+
+      const lastMessage = this.messages[this.messages.length - 1];
+
+      if (lastMessage.id === this.activeResponse.state.message.id) {
+        this.replaceMessage(this.activeResponse.state.message);
       } else {
-        this.pushMessage(state.message);
+        this.pushMessage(this.activeResponse.state.message);
       }
     };
 
@@ -185,13 +192,15 @@ export class Chat {
           body,
           headers,
         },
-        this.abortController.signal,
+        this.activeResponse.abortController.signal,
       );
+
+      const { state } = this.activeResponse;
 
       await consumeStream<MessageChunk>({
         stream: response.pipeThrough(
           new TransformStream({
-            transform: (chunk, controller) => {
+            transform: async (chunk, controller) => {
               this.setStatus({ status: "streaming" });
 
               switch (chunk.type) {
@@ -240,14 +249,10 @@ export class Chat {
                   };
 
                   state.message.parts.push(toolCallPart);
+
                   write();
 
-                  /**
-                   * TODO: 유저에게 선택권을 넘기는 과정에선 문제가 없지만, 유저에게 Tool-Call 선택권을 주지 않는 경우에는 스트리밍을 진행하는 도중에 스트리밍 요청을 보내게 됨.
-                   * 이는 스트림이 순차적으로 처리가 되지 못 할 수도 있고, 순서 또한 섞일 수 있는 문제가 있음.
-                   * vercel/ai sdk 에서는 jobExecutor를 통해서 이중 스트리밍을 방지하고 순서에 맞는 진행을 하는 것 같음.
-                   */
-                  // this.onToolCall?.(toolCallPart);
+                  await this.onToolCall?.(toolCallPart);
                   break;
                 }
                 default:
@@ -274,6 +279,14 @@ export class Chat {
       if (error instanceof Error) {
         this.setStatus({ status: "error", error });
       }
+    } finally {
+      this.activeResponse = undefined;
+    }
+
+    while (this.queue.length > 0) {
+      const job = this.queue.shift();
+
+      await job?.();
     }
   };
 
@@ -281,7 +294,7 @@ export class Chat {
    * 현재 진행 중인 스트리밍 응답을 중단합니다.
    */
   public abort = () => {
-    this.abortController?.abort();
+    this.activeResponse?.abortController?.abort();
   };
 
   public get messages(): Message[] {

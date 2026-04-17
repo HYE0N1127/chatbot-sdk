@@ -30,6 +30,7 @@ export class Chat {
   private statusListeners: Set<() => void> = new Set();
 
   private onToolCall?: (part: ToolCallPart) => Promise<void> | void;
+  private syncStorage?: (messages: Message[]) => Promise<void> | void;
 
   private connect: Connection;
   private activeResponse: ActiveResponse | undefined;
@@ -45,12 +46,18 @@ export class Chat {
   constructor({
     connection,
     onToolCall,
+    syncStorage,
+    messages,
   }: {
     connection: Connection;
     onToolCall?: (part: ToolCallPart) => void;
+    syncStorage?: (messages: Message[]) => Promise<void> | void;
+    messages: Message[];
   }) {
     this.onToolCall = onToolCall;
     this.connect = connection;
+    this.syncStorage = syncStorage;
+    this._messages = messages;
   }
 
   public setStatus = ({
@@ -126,6 +133,29 @@ export class Chat {
       job();
     } else {
       this.queue.push(job);
+    }
+  };
+
+  public resumeStream = async ({
+    body,
+    headers,
+  }: {
+    body?: Record<string, unknown>;
+    headers?: Record<string, string>;
+  } = {}) => {
+    // 현재 상태가 submitted, streaming 이라면 ai와 통신 중을 의미하기에, 실행을 막습니다.
+    if (this.status === "submitted" || this.status === "streaming") {
+      return;
+    }
+
+    const lastMessage = this._messages[this._messages.length - 1];
+
+    if (
+      lastMessage &&
+      lastMessage.role !== "user" &&
+      lastMessage.state !== "done"
+    ) {
+      await this.request({ body, headers });
     }
   };
 

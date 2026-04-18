@@ -1,20 +1,23 @@
 import { useMemo, useSyncExternalStore } from "react";
 import { Chat } from "../sdk/index";
 import { Config, createConnection } from "../sdk/connection/index";
-import { ToolCallPart } from "../type/message/index";
+import { ToolCallPart, Message } from "../type/message/index";
 
 export const useChat = <T>({
   config,
   onToolCall,
+  initialMessages = [],
 }: {
   config: Config<T>;
-  onToolCall: (part: ToolCallPart) => void;
+  onToolCall?: (part: ToolCallPart) => void;
+  initialMessages?: Message[];
 }) => {
   const chat = useMemo(
     () =>
       new Chat({
         connection: createConnection<T>(config),
         onToolCall,
+        messages: initialMessages,
       }),
     [],
   );
@@ -35,6 +38,7 @@ export const useChat = <T>({
     status,
     messages,
     sendMessage: chat.sendMessage,
+    resumeStream: chat.resumeStream,
     addToolOutput: chat.addToolOutput,
   };
 };

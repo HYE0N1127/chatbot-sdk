@@ -30,7 +30,6 @@ export class Chat {
   private statusListeners: Set<() => void> = new Set();
 
   private onToolCall?: (part: ToolCallPart) => Promise<void> | void;
-  private syncStorage?: (messages: Message[]) => Promise<void> | void;
 
   private connect: Connection;
   private activeResponse: ActiveResponse | undefined;
@@ -46,17 +45,14 @@ export class Chat {
   constructor({
     connection,
     onToolCall,
-    syncStorage,
     messages,
   }: {
     connection: Connection;
     onToolCall?: (part: ToolCallPart) => void;
-    syncStorage?: (messages: Message[]) => Promise<void> | void;
     messages: Message[];
   }) {
     this.onToolCall = onToolCall;
     this.connect = connection;
-    this.syncStorage = syncStorage;
     this._messages = messages;
   }
 
@@ -68,6 +64,7 @@ export class Chat {
     | { status: "error"; error: Error }) => {
     this._status = status;
     this._error = error;
+    this.notifyStatus();
   };
 
   private pushMessage = (message: Message) => {
@@ -236,13 +233,20 @@ export class Chat {
               switch (chunk.type) {
                 case "text": {
                   if (state.activeTextParts[chunk.id] == null) {
-                    const textPart: TextPart = {
-                      type: "text",
-                      content: "",
-                    };
+                    const lastPart =
+                      state.message.parts[state.message.parts.length - 1];
 
-                    state.activeTextParts[chunk.id] = textPart;
-                    state.message.parts.push(textPart);
+                    if (lastPart && lastPart.type === "text") {
+                      state.activeTextParts[chunk.id] = lastPart as TextPart;
+                    } else {
+                      const textPart: TextPart = {
+                        type: "text",
+                        content: "",
+                      };
+
+                      state.activeTextParts[chunk.id] = textPart;
+                      state.message.parts.push(textPart);
+                    }
                   }
 
                   const textPart = state.activeTextParts[chunk.id];
@@ -361,5 +365,9 @@ export class Chat {
 
   private notify() {
     this.listeners.forEach((listener) => listener());
+  }
+
+  private notifyStatus() {
+    this.statusListeners.forEach((listener) => listener());
   }
 }

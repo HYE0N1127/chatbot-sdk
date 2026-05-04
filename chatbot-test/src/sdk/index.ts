@@ -28,6 +28,7 @@ export class Chat {
 
   private listeners: Set<() => void> = new Set();
   private statusListeners: Set<() => void> = new Set();
+  private errorListeners: Set<() => void> = new Set();
 
   private onToolCall?: (part: ToolCallPart) => Promise<void> | void;
 
@@ -64,6 +65,7 @@ export class Chat {
     | { status: "error"; error: Error }) => {
     this._status = status;
     this._error = error;
+    this.notifyError();
     this.notifyStatus();
   };
 
@@ -363,11 +365,22 @@ export class Chat {
     };
   };
 
+  public subscribeError = (listener: () => void) => {
+    this.errorListeners.add(listener);
+    return () => {
+      this.errorListeners.delete(listener);
+    };
+  };
+
   private notify() {
     this.listeners.forEach((listener) => listener());
   }
 
   private notifyStatus() {
     this.statusListeners.forEach((listener) => listener());
+  }
+
+  private notifyError() {
+    this.errorListeners.forEach((listener) => listener());
   }
 }

@@ -1,8 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef } from "react";
 import { useChat } from "./hooks/hooks";
 import { GeminiResponse } from "./type/fetch/response/index";
 import { MessageChunk, ToolCallPart } from "./type/message/index";
 import { GeminiContent, GeminiPart } from "./type/fetch/request/index";
+import Input from "./components/input/index";
+import Bubble from "./components/bubble/index";
 
 function App() {
   const { messages, sendMessage, addToolOutput } = useChat<GeminiResponse>({
@@ -59,10 +61,6 @@ function App() {
             }
 
             case "assistant": {
-              /**
-               * Gemini는 Function-Call 사용 시 user Role에서 functionResponse 필드를, model Role에서 functionCall 필드를 갖고 있어야 하기에
-               * 이를 partOutput이 존재하는지 여부를 거쳐 userRole로 추가합니다.
-               */
               const modelParts: GeminiPart[] = [];
               const userResponseParts: GeminiPart[] = [];
 
@@ -154,119 +152,42 @@ function App() {
     },
   });
 
-  useEffect(() => {
-    console.log(messages);
-  }, [messages]);
-
-  const [inputText, setInputText] = useState("");
-
-  const handleSend = () => {
-    if (!inputText.trim()) {
-      return;
-    }
-
-    sendMessage({ text: inputText });
-    setInputText("");
-  };
-
   const getWeatherInfo = async (): Promise<Record<string, unknown>> => {
     return {
       temperature: 24,
       location: "Seoul",
       chancePrecipitation: "56%",
-      cloudConditions: "partlyCloudy",
+      cloudConditions: "흐림",
     };
   };
 
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  const handleSendMessage = (text: string) => {
+    sendMessage({ text });
+  };
+
   return (
-    <div style={{ padding: "20px", maxWidth: "600px", margin: "0 auto" }}>
-      <div
-        style={{
-          border: "1px solid #ccc",
-          padding: "10px",
-          minHeight: "400px",
-          marginBottom: "10px",
-          display: "flex",
-          flexDirection: "column",
-          gap: "10px",
-        }}
-      >
+    <div className="flex flex-col h-screen max-w-3xl mx-auto font-sans bg-white shadow-sm">
+      <header className="px-6 py-4 border-b border-gray-200 bg-white/80 backdrop-blur-sm sticky top-0 z-10">
+        <h1 className="text-lg font-semibold text-gray-800 m-0">ChatBot</h1>
+      </header>
+
+      <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-6 bg-white scroll-smooth">
         {messages.map((message) => (
-          <div key={message.id}>
-            {message.parts.map((part, index) => {
-              switch (part.type) {
-                case "text":
-                  return <p key={index}>{part.content}</p>;
-                case "reasoning":
-                  return (
-                    <details key={index}>
-                      <summary>사고 과정</summary>
-                      <div style={{ color: "gray", fontSize: "12px" }}>
-                        {part.content}
-                      </div>
-                    </details>
-                  );
-                // case "tool-call": {
-                //   if (part.toolName === "get_current_temperature") {
-                //     if (part.output) {
-                //       return null;
-                //     }
-
-                //     return (
-                //       <div key={index}>
-                //         날씨를 조회해도 되겠읍니까?
-                //         <button
-                //           onClick={async () => {
-                //             const weather = await getWeatherInfo();
-
-                //             await addToolOutput({
-                //               ...part,
-                //               output: weather,
-                //             });
-
-                //             sendMessage({});
-                //           }}
-                //         >
-                //           네
-                //         </button>
-                //         <button>네니오</button>
-                //       </div>
-                //     );
-                //   }
-                //   break;
-                // }
-
-                default:
-                  return null;
-              }
-            })}
-          </div>
+          <Bubble key={message.id} role={message.role} parts={message.parts} />
         ))}
+        <div ref={messagesEndRef} className="h-1" />
       </div>
 
-      <div style={{ display: "flex", gap: "10px" }}>
-        <input
-          type="text"
-          value={inputText}
-          onChange={(e) => setInputText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.nativeEvent.isComposing) return;
-            if (e.key === "Enter") handleSend();
-          }}
-          style={{ flex: 1, padding: "10px" }}
-          placeholder="메시지를 입력하세요..."
-        />
-        <button onClick={handleSend} style={{ padding: "10px 20px" }}>
-          전송
-        </button>
-      </div>
+      {/* 입력 영역 */}
+      <Input onSend={handleSendMessage} />
     </div>
   );
 }
 
 export default App;
-
-/**
- * 미친듯이 긴 답변이 날라오는 프롬프트
- * "React의 핵심 동작 원리인 Virtual DOM의 탄생 배경부터, 브라우저의 실제 DOM과 비교하는 Reconcilation(재조정) 알고리즘의 작동 방식, 그리고 React 16부터 도입된 Fiber 아키텍처가 렌더링 최적화를 어떻게 이뤄냈는지 밑바닥부터 딥다이브해서 아주 길고 상세하게 논문처럼 설명해줘. 각 단계별로 내부 동작을 보여주는 의사 코드(Pseudo-code)나 자바스크립트 예시 코드를 듬뿍 섞어서 작성해줘."
- */

@@ -1,5 +1,5 @@
 {
-  "name": "chatbot-test",
+  "name": "chatbot-sdk",
   "version": "0.1.0",
   "private": true,
   "dependencies": {
